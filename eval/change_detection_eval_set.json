@@ -1,0 +1,19 @@
+{
+  "_comment": "Hand-labeled examples of 'real signal' vs 'noise' content-change pairs, used to tune and report a precision number for pipeline/detection/change_detector.py. Populate with real snapshot pairs once the ComplyDo competitor list + source URLs are finalized (see context.md section 10) — this file currently ships with placeholder examples only so run_eval.py has something to execute against.",
+  "examples": [
+    {
+      "id": "placeholder-noise-1",
+      "old_text": "Our Pro plan is $49/month and includes unlimited projects, priority support, and API access.",
+      "new_text": "Our Pro plan is $49 per month and includes unlimited projects, priority support, and API access.",
+      "label": "noise",
+      "note": "Cosmetic rewording only ('$49/month' -> '$49 per month'), no actual price or feature change."
+    },
+    {
+      "id": "placeholder-real-1",
+      "old_text": "Our Pro plan is $49/month and includes unlimited projects, priority support, and API access.",
+      "new_text": "Our Pro plan is $79/month and includes unlimited projects, priority support, API access, and SSO.",
+      "label": "real",
+      "note": "Price increase ($49 -> $79) plus a new feature (SSO) added to the plan."
+    }
+  ]
+}

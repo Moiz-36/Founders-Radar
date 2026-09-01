@@ -1,0 +1,16 @@
+# Cloud Scheduler job config for the weekly pipeline run.
+# Deploy with:
+#   gcloud scheduler jobs create http founders-radar-weekly \
+#     --schedule="0 8 * * 1" \
+#     --uri="<cloud-function-url>" \
+#     --http-method=POST \
+#     --message-body='{"target_company_id": "<uuid>"}' \
+#     --time-zone="America/New_York"
+
+name: founders-radar-weekly
+schedule: "0 8 * * 1"        # every Monday at 08:00
+time_zone: "America/New_York"
+http_method: POST
+uri: "<cloud-function-url>"  # filled in after `gcloud functions deploy`
+body:
+  target_company_id: "<uuid>"

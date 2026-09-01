@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 2.2cm 1.8cm; }
+  body { font-family: "Georgia", "Times New Roman", serif; color: #1a1f27; font-size: 11pt; }
+  h1 { font-size: 22pt; margin-bottom: 0.1em; font-family: "Helvetica", sans-serif; }
+  .subtitle { color: #5b6472; font-size: 10pt; margin-bottom: 1.6em; font-family: "Helvetica", sans-serif; }
+  .summary { background: #f4f6f9; border-left: 3px solid #2C3E50; padding: 1em 1.2em; margin-bottom: 2em; line-height: 1.5; }
+  h2 { font-family: "Helvetica", sans-serif; font-size: 14pt; border-bottom: 1px solid #d8dde3; padding-bottom: 0.3em; margin-top: 2em; }
+  .charts { display: flex; gap: 1em; margin: 1.5em 0; }
+  .charts img { width: 48%; }
+  .card { border: 1px solid #d8dde3; border-radius: 6px; padding: 1em 1.2em; margin-bottom: 1em; page-break-inside: avoid; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; font-family: "Helvetica", sans-serif; }
+  .priority { font-size: 8pt; font-weight: bold; padding: 0.2em 0.7em; border-radius: 3px; text-transform: uppercase; }
+  .priority-high { background: #f6d3d3; color: #8a1f1f; }
+  .priority-medium { background: #f5e3b3; color: #7a5c00; }
+  .priority-low { background: #dde5ee; color: #3a4a5c; }
+  .card .field-label { font-family: "Helvetica", sans-serif; font-size: 8.5pt; color: #5b6472; text-transform: uppercase; margin-top: 0.6em; }
+  .appendix { font-size: 9pt; color: #5b6472; }
+</style>
+</head>
+<body>
+  <h1>{{ headline }}</h1>
+  <div class="subtitle">{{ target_company_name }} — Competitive Intelligence — {{ week_start }} to {{ week_end }}</div>
+
+  <div class="summary">{{ executive_summary }}</div>
+
+  {% if chart_paths %}
+  <h2>This Week at a Glance</h2>
+  <div class="charts">
+    <img src="{{ chart_paths.volume_by_competitor }}">
+    <img src="{{ chart_paths.category_breakdown }}">
+  </div>
+  {% endif %}
+
+  <h2>Signals</h2>
+  {% for card in cards %}
+  <div class="card">
+    <div class="card-header">
+      <strong>{{ card.competitor_name }} — {{ card.source_type | replace('_', ' ') | title }}</strong>
+      <span class="priority priority-{{ card.priority }}">{{ card.priority }}</span>
+    </div>
+    <div class="field-label">What changed</div>
+    <div>{{ card.what_changed }}</div>
+    <div class="field-label">Why it matters</div>
+    <div>{{ card.why_it_matters }}</div>
+    {% if card.suggested_response %}
+    <div class="field-label">Suggested response</div>
+    <div>{{ card.suggested_response }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <h2>Appendix: Sources</h2>
+  <ul class="appendix">
+    {% for card in cards %}
+    <li>{{ card.competitor_name }} ({{ card.source_type }}): {{ card.source_url }}</li>
+    {% endfor %}
+  </ul>
+</body>
+</html>
