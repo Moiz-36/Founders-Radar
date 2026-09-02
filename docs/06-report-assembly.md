@@ -13,13 +13,13 @@ backend/report/templates/report.html.jinja # the actual report layout/styling
 
 ## Build steps
 1. `build_signal_cards()` turns `Signal` rows into `SignalCard` dataclasses (joins in competitor name via `source.competitor`), sorted high-priority-first.
-2. `generate_headline_and_summary()` sends the week's signals to Grok and expects `{"headline": ..., "executive_summary": ...}` back — same xAI client setup as [04-analyst-validator.md](./04-analyst-validator.md).
+2. `generate_headline_and_summary()` sends the week's signals to Groq and expects `{"headline": ..., "executive_summary": ...}` back — same client setup as [04-analyst-validator.md](./04-analyst-validator.md).
 3. `build_chart_data()` computes two breakdowns (signal volume per competitor, signal count per category) as plain dicts, stored in `reports.chart_data` (JSONB).
 4. `charts.py` renders those two dicts to PNG files via matplotlib (headless `Agg` backend).
 5. `pdf_renderer.py` renders `report.html.jinja` with the report data + chart image paths, writes it to a temp `.html` file, opens it in Playwright's Chromium via `page.goto()`, and calls `page.pdf()`.
 
 ## Status
-**Fully smoke-tested end-to-end** with fake signal data (no DB, no real LLM call) — charts render correctly and the PDF layout (headline, exec summary callout box, priority badges, signal cards, charts, source appendix) all look right. Not yet run with a real `Report`/`Signal` from the database.
+**Fully smoke-tested end-to-end** with fake signal data — charts render correctly and the PDF layout (headline, exec summary callout box, priority badges, signal cards, charts, source appendix) all look right. `generate_headline_and_summary()` has also been run against the **real Groq API** (not mocked) with real signal data and returned a coherent headline + summary. Not yet run with a real `Report`/`Signal` pulled from the database.
 
 ## Gotchas
 - **Do not use `page.set_content()` for the PDF step** — Chromium doesn't reliably resolve local `file://` `<img>` sources against a page with no real navigation, so charts silently render as broken image icons. Must write the HTML to disk and `page.goto()` it (already implemented this way — see [decisions.md](./decisions.md) for how this was discovered).

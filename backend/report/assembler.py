@@ -10,10 +10,10 @@ from sqlalchemy.orm import Session
 
 from backend.db.models import Competitor, Report, Signal, Source, TargetCompany
 
-# xAI's API is OpenAI-compatible — see backend/analysis/analyst.py.
-MODEL = "grok-4"
+# Groq's API is OpenAI-compatible — see backend/analysis/analyst.py.
+MODEL = "openai/gpt-oss-120b"
 
-_client = OpenAI(api_key=os.environ["XAI_API_KEY"], base_url="https://api.x.ai/v1")
+_client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
 
 SUMMARY_SYSTEM_PROMPT = """You are a market intelligence analyst writing the \
 executive summary for a weekly competitor report. Given a list of this week's \
@@ -62,7 +62,9 @@ def generate_headline_and_summary(cards: list[SignalCard]) -> tuple[str, str]:
     )
     response = _client.chat.completions.create(
         model=MODEL,
-        max_tokens=512,
+        max_tokens=1024,
+        response_format={"type": "json_object"},
+        extra_body={"reasoning_effort": "low"},
         messages=[
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": signals_block or "(no signals this week)"},

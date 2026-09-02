@@ -1,7 +1,7 @@
 """RAG + LLM synthesis: turn a detected raw change into a structured signal.
 
 For each detected change, retrieves related historical snapshots for the same
-source via pgvector similarity search, then prompts Claude to produce
+source via pgvector similarity search, then prompts an LLM to produce
 structured output. Output should be passed through validator.validate_signal
 before being persisted.
 """
@@ -16,12 +16,18 @@ from sqlalchemy.orm import Session
 
 from backend.db.models import Snapshot, Source
 
-# xAI's API is OpenAI-compatible, so we reuse the `openai` SDK pointed at
-# their endpoint instead of pulling in a separate xAI client library.
-MODEL = "grok-4"
+# Groq's API is OpenAI-compatible, so we reuse the `openai` SDK pointed at
+# their endpoint instead of pulling in a separate Groq client library.
+# Not to be confused with xAI's "Grok" — different company, different API.
+#
+# gpt-oss-120b is a reasoning model: it spends tokens on hidden chain-of-thought
+# before emitting the final answer, so max_tokens needs real headroom (a low
+# budget truncates it to an empty response). reasoning_effort="low" keeps that
+# overhead small for this task, which doesn't need deep reasoning.
+MODEL = "openai/gpt-oss-120b"
 RETRIEVAL_TOP_K = 3
 
-_client = OpenAI(api_key=os.environ["XAI_API_KEY"], base_url="https://api.x.ai/v1")
+_client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
 
 SYSTEM_PROMPT = """You are a market intelligence analyst. Given an old and new \
 version of a competitor's source content, and some related historical context, \
@@ -78,7 +84,9 @@ RELATED HISTORICAL CONTEXT:
 
     response = _client.chat.completions.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        extra_body={"reasoning_effort": "low"},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},

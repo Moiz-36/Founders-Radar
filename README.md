@@ -21,7 +21,7 @@ Collectors → Change Detector → Analyst (RAG + LLM) → Scorer → Report Ass
 
 ## Stack
 
-FastAPI · PostgreSQL + pgvector (Supabase) · SQLAlchemy · BeautifulSoup / Playwright · local sentence-transformers embeddings (free, no API key) · Grok/xAI (analyst) · matplotlib · Playwright/Chromium (PDF rendering) · Next.js (Vercel)
+FastAPI · PostgreSQL + pgvector (Supabase) · SQLAlchemy · BeautifulSoup / Playwright · local sentence-transformers embeddings (free, no API key) · Groq (analyst) · matplotlib · Playwright/Chromium (PDF rendering) · Next.js (Vercel)
 
 The pipeline (scraping/detection/analysis/rendering) is fully decoupled from the frontend — Vercel only ever reads a *finished* report from Supabase; it never runs scraping or generation.
 
@@ -41,7 +41,7 @@ infra/          # Cloud Function + Cloud Scheduler config, SQL schema
 py -3.12 -m venv .venv
 ./.venv/Scripts/pip install -r backend/requirements.txt
 ./.venv/Scripts/python -m playwright install chromium
-cp .env.example .env   # fill in DATABASE_URL (postgresql+psycopg://...) and XAI_API_KEY
+cp .env.example .env   # fill in DATABASE_URL (postgresql+psycopg://...) and GROQ_API_KEY
 ./.venv/Scripts/uvicorn backend.main:app --reload
 
 # Database (once, against your Supabase project)

@@ -10,6 +10,14 @@ Already decided in `context.md`. User has an existing Supabase project to use di
 ### 2026-09-01 — LLM synthesis: Grok (xAI) instead of Claude/Anthropic
 **Why:** User is a student building this for free/low-cost; already has an xAI API key. Anthropic was the original plan in `context.md` but wasn't cheaper/free for this use case.
 **Effect:** `backend/analysis/analyst.py` and `backend/report/assembler.py` use the `openai` Python SDK pointed at `https://api.x.ai/v1` (xAI's API is OpenAI-compatible) instead of the `anthropic` SDK. Model constant: `grok-4` — check console.x.ai for the current model name if this errors as unavailable.
+**Superseded** by the next entry — switched to Groq instead.
+
+### 2026-09-02 — LLM synthesis: Groq instead of Grok/xAI
+**Why:** User decided to switch providers ("i am changing to groq"). Note this is a genuinely different company/API from xAI's "Grok" despite the near-identical name — easy to mix up.
+**Effect:** `backend/analysis/analyst.py` and `backend/report/assembler.py` now point the `openai` SDK at `https://api.groq.com/openai/v1` (also OpenAI-compatible) with `GROQ_API_KEY`, not `XAI_API_KEY`. `.env`/`.env.example` updated accordingly.
+**Model chosen:** `openai/gpt-oss-120b` — queried `client.models.list()` against the real account to see what's actually available (the first guess, `llama-3.3-70b-versatile`, 404'd — deprecated/unavailable). gpt-oss-120b is a large open-weight reasoning model, chosen for quality on structured-output tasks.
+**Gotcha found by testing, not guessing:** gpt-oss-120b is a *reasoning* model — it spends tokens on hidden chain-of-thought before the final answer, so a low `max_tokens` (tried 50) silently truncates it to an empty response, which then fails JSON-mode validation with an opaque `json_validate_failed` error. Fixed by raising `max_tokens` (2048 in analyst.py, 1024 in assembler.py) and setting `extra_body={"reasoning_effort": "low"}` to keep the hidden-reasoning overhead small for this task.
+**Verified:** ran a real end-to-end call through `generate_headline_and_summary()` with real signal data — got back a coherent headline and 4-sentence exec summary from the live API, not a mock.
 
 ### 2026-09-01 — Embeddings: local sentence-transformers instead of OpenAI
 **Why:** Student wants zero ongoing API cost. OpenAI embeddings are cheap but not free and require a billed account; a local open-source embedding model has no per-call cost and no key to manage.

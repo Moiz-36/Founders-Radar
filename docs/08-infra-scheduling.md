@@ -12,7 +12,7 @@ infra/sql/schema.sql                     # see 01-database.md
 ```
 
 ## Build steps
-1. Deploy `infra/cloud_function/` as a GCP Cloud Function (HTTP-triggered), with `backend/` available as a dependency and `XAI_API_KEY`/`DATABASE_URL` set as function environment variables/secrets.
+1. Deploy `infra/cloud_function/` as a GCP Cloud Function (HTTP-triggered), with `backend/` available as a dependency and `GROQ_API_KEY`/`DATABASE_URL` set as function environment variables/secrets.
 2. `gcloud scheduler jobs create http founders-radar-weekly --schedule="0 8 * * 1" --uri="<cloud-function-url>" --http-method=POST --message-body='{"target_company_id": "<uuid>"}' --time-zone="America/New_York"` (see the comment block in `scheduler_config.yaml`).
 3. Fill in the real Cloud Function URL and target company UUID in `scheduler_config.yaml` once known.
 
