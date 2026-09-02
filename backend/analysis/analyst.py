@@ -14,7 +14,7 @@ from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pipeline.db.models import Snapshot, Source
+from backend.db.models import Snapshot, Source
 
 # xAI's API is OpenAI-compatible, so we reuse the `openai` SDK pointed at
 # their endpoint instead of pulling in a separate xAI client library.

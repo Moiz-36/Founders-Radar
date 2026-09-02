@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand-labeled examples of 'real signal' vs 'noise' content-change pairs, used to tune and report a precision number for pipeline/detection/change_detector.py. Populate with real snapshot pairs once the ComplyDo competitor list + source URLs are finalized (see context.md section 10) — this file currently ships with placeholder examples only so run_eval.py has something to execute against.",
+  "_comment": "Hand-labeled examples of 'real signal' vs 'noise' content-change pairs, used to tune and report a precision number for backend/detection/change_detector.py. Populate with real snapshot pairs once the ComplyDo competitor list + source URLs are finalized (see context.md section 10) — this file currently ships with placeholder examples only so run_eval.py has something to execute against.",
   "examples": [
     {
       "id": "placeholder-noise-1",

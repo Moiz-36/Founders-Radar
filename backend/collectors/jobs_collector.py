@@ -7,7 +7,7 @@ collector uses Playwright instead of a plain `requests` GET.
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-from pipeline.collectors.base import BaseCollector, is_allowed_by_robots
+from backend.collectors.base import BaseCollector, is_allowed_by_robots
 
 
 class JobsCollector(BaseCollector):

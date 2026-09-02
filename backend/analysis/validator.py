@@ -6,8 +6,8 @@ the failure rate is visible and demoable (see section 4.3 of context.md).
 
 import logging
 
-from pipeline.analysis.analyst import AnalystOutput
-from pipeline.detection.change_detector import cosine_similarity, embed
+from backend.analysis.analyst import AnalystOutput
+from backend.detection.change_detector import cosine_similarity, embed
 
 logger = logging.getLogger("founders_radar.validator")
 

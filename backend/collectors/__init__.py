@@ -1,8 +1,8 @@
-from pipeline.collectors.base import BaseCollector, CollectedContent
-from pipeline.collectors.feature_collector import FeatureCollector
-from pipeline.collectors.jobs_collector import JobsCollector
-from pipeline.collectors.news_collector import NewsCollector
-from pipeline.collectors.pricing_collector import PricingCollector
+from backend.collectors.base import BaseCollector, CollectedContent
+from backend.collectors.feature_collector import FeatureCollector
+from backend.collectors.jobs_collector import JobsCollector
+from backend.collectors.news_collector import NewsCollector
+from backend.collectors.pricing_collector import PricingCollector
 
 COLLECTOR_BY_SOURCE_TYPE = {
     "pricing": PricingCollector,

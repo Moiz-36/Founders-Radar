@@ -1,2 +1,2 @@
 functions-framework==3.8.2
--r ../../pipeline/requirements.txt
+-r ../../backend/requirements.txt

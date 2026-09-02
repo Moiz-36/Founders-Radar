@@ -12,16 +12,16 @@ from pathlib import Path
 from fastapi import FastAPI
 from sqlalchemy import select
 
-from pipeline.analysis.analyst import analyze_change, retrieve_related_context
-from pipeline.analysis.validator import validate_signal
-from pipeline.collectors import COLLECTOR_BY_SOURCE_TYPE
-from pipeline.db.models import Signal, Snapshot, Source, TargetCompany
-from pipeline.db.session import SessionLocal
-from pipeline.detection.change_detector import embed, is_real_change
-from pipeline.report.assembler import assemble_report, build_signal_cards
-from pipeline.report.charts import render_report_charts
-from pipeline.report.pdf_renderer import render_pdf
-from pipeline.scoring.scorer import score_signal
+from backend.analysis.analyst import analyze_change, retrieve_related_context
+from backend.analysis.validator import validate_signal
+from backend.collectors import COLLECTOR_BY_SOURCE_TYPE
+from backend.db.models import Signal, Snapshot, Source, TargetCompany
+from backend.db.session import SessionLocal
+from backend.detection.change_detector import embed, is_real_change
+from backend.report.assembler import assemble_report, build_signal_cards
+from backend.report.charts import render_report_charts
+from backend.report.pdf_renderer import render_pdf
+from backend.scoring.scorer import score_signal
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("founders_radar.pipeline")

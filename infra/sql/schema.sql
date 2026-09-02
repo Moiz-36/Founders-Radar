@@ -1,5 +1,5 @@
 -- Founder's Radar database schema (Supabase / Postgres + pgvector)
--- Matches pipeline/db/models.py. Run once against a fresh Supabase project.
+-- Matches backend/db/models.py. Run once against a fresh Supabase project.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -30,7 +30,7 @@ CREATE TABLE snapshots (
     source_id UUID REFERENCES sources(id),
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
-    embedding VECTOR(384),  -- local sentence-transformers all-MiniLM-L6-v2 (see pipeline/detection/change_detector.py)
+    embedding VECTOR(384),  -- local sentence-transformers all-MiniLM-L6-v2 (see backend/detection/change_detector.py)
     fetched_at TIMESTAMPTZ DEFAULT now()
 );
 

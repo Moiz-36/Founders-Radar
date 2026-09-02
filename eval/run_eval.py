@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from pipeline.detection.change_detector import DEFAULT_SIMILARITY_THRESHOLD, is_real_change
+from backend.detection.change_detector import DEFAULT_SIMILARITY_THRESHOLD, is_real_change
 
 EVAL_SET_PATH = Path(__file__).parent / "change_detection_eval_set.json"
 

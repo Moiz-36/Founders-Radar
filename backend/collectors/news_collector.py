@@ -5,7 +5,7 @@ and has no rate-limit headaches — swap in a different provider later if HN
 coverage proves too thin for the pilot competitors.
 """
 
-from pipeline.collectors.base import BaseCollector
+from backend.collectors.base import BaseCollector
 
 HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search"
 

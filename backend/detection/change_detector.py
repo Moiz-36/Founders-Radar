@@ -13,7 +13,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384  # must match pipeline/db/models.py and infra/sql/schema.sql
+EMBEDDING_DIM = 384  # must match backend/db/models.py and infra/sql/schema.sql
 
 # Tuned against /eval/change_detection_eval_set.json — see eval/run_eval.py for
 # the precision this achieves. MiniLM's cosine similarities run much higher than

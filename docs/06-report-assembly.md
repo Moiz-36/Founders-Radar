@@ -5,10 +5,10 @@ Turn a week's scored signals into a finished, designed artifact: a headline + ex
 
 ## File structure
 ```
-pipeline/report/assembler.py               # SignalCard, build_signal_cards(), generate_headline_and_summary(), build_chart_data(), assemble_report()
-pipeline/report/charts.py                  # matplotlib -> PNG (volume-by-competitor bar chart, category-breakdown pie chart)
-pipeline/report/pdf_renderer.py            # Jinja2 HTML template -> PDF via Playwright/Chromium
-pipeline/report/templates/report.html.jinja # the actual report layout/styling
+backend/report/assembler.py               # SignalCard, build_signal_cards(), generate_headline_and_summary(), build_chart_data(), assemble_report()
+backend/report/charts.py                  # matplotlib -> PNG (volume-by-competitor bar chart, category-breakdown pie chart)
+backend/report/pdf_renderer.py            # Jinja2 HTML template -> PDF via Playwright/Chromium
+backend/report/templates/report.html.jinja # the actual report layout/styling
 ```
 
 ## Build steps

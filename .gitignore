@@ -17,7 +17,7 @@ frontend/out/
 frontend/.vercel/
 
 # Reports / generated output
-pipeline/output/
+backend/output/
 *.pdf
 !README_assets/*.pdf
 

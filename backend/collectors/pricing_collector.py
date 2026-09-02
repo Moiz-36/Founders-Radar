@@ -1,12 +1,12 @@
-"""Scrapes a competitor's feature/changelog/blog page."""
+"""Scrapes a competitor's pricing page."""
 
 from bs4 import BeautifulSoup
 
-from pipeline.collectors.base import BaseCollector
+from backend.collectors.base import BaseCollector
 
 
-class FeatureCollector(BaseCollector):
-    source_type = "feature"
+class PricingCollector(BaseCollector):
+    source_type = "pricing"
 
     def fetch_raw(self) -> str:
         response = self._get()

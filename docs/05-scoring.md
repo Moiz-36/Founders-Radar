@@ -5,7 +5,7 @@ Assign each signal a High/Medium/Low priority so the report can sort the founder
 
 ## File structure
 ```
-pipeline/scoring/scorer.py    # PRIORITY_RUBRIC dict + score_signal()
+backend/scoring/scorer.py    # PRIORITY_RUBRIC dict + score_signal()
 ```
 
 ## Build steps

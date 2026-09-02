@@ -13,8 +13,8 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from playwright.sync_api import sync_playwright
 
-from pipeline.db.models import Report, TargetCompany
-from pipeline.report.assembler import SignalCard
+from backend.db.models import Report, TargetCompany
+from backend.report.assembler import SignalCard
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 

@@ -1,14 +1,14 @@
 """GCP Cloud Function entrypoint — triggers the pipeline on a schedule via Cloud Scheduler.
 
-Deploy with the pipeline/ package included (or installed as a dependency), and
+Deploy with the backend/ package included (or installed as a dependency), and
 point Cloud Scheduler at this function's HTTP trigger. Kept separate from
-pipeline/main.py's FastAPI app since Cloud Functions and FastAPI have
+backend/main.py's FastAPI app since Cloud Functions and FastAPI have
 different entrypoint conventions.
 """
 
 import os
 
-from pipeline.main import run_pipeline_for_target
+from backend.main import run_pipeline_for_target
 
 
 def run_weekly_pipeline(request) -> tuple[dict, int]:

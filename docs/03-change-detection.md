@@ -5,7 +5,7 @@ Decide whether a hash-changed piece of content is a *real* signal (pricing chang
 
 ## File structure
 ```
-pipeline/detection/change_detector.py    # embed(), cosine_similarity(), is_real_change()
+backend/detection/change_detector.py    # embed(), cosine_similarity(), is_real_change()
 eval/change_detection_eval_set.json      # hand-labeled real-vs-noise examples
 eval/run_eval.py                         # runs is_real_change() against the eval set, reports precision/recall
 ```

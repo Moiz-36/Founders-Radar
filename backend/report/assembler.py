@@ -8,9 +8,9 @@ from datetime import date
 from openai import OpenAI
 from sqlalchemy.orm import Session
 
-from pipeline.db.models import Competitor, Report, Signal, Source, TargetCompany
+from backend.db.models import Competitor, Report, Signal, Source, TargetCompany
 
-# xAI's API is OpenAI-compatible — see pipeline/analysis/analyst.py.
+# xAI's API is OpenAI-compatible — see backend/analysis/analyst.py.
 MODEL = "grok-4"
 
 _client = OpenAI(api_key=os.environ["XAI_API_KEY"], base_url="https://api.x.ai/v1")

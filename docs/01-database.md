@@ -5,8 +5,8 @@ Stores tracked companies/competitors/sources, raw scraped snapshots (with embedd
 
 ## File structure
 ```
-pipeline/db/models.py     # SQLAlchemy models — source of truth for the schema in code
-pipeline/db/session.py    # engine/session setup, reads DATABASE_URL
+backend/db/models.py     # SQLAlchemy models — source of truth for the schema in code
+backend/db/session.py    # engine/session setup, reads DATABASE_URL
 infra/sql/schema.sql      # raw SQL version of the same schema, for `psql -f` against Supabase
 ```
 
@@ -14,7 +14,7 @@ infra/sql/schema.sql      # raw SQL version of the same schema, for `psql -f` ag
 1. Create a Supabase project (done — user already has one).
 2. Run `infra/sql/schema.sql` against it: `psql "$DATABASE_URL" -f infra/sql/schema.sql`. This also runs `CREATE EXTENSION IF NOT EXISTS vector;` and creates an ivfflat index for pgvector similarity search.
 3. Set `DATABASE_URL` in `.env` — **must** use the `postgresql+psycopg://` scheme, not plain `postgresql://` (see [decisions.md](./decisions.md) — this project uses psycopg v3, and SQLAlchemy defaults to psycopg2 without the `+psycopg` suffix).
-4. `pipeline/db/session.py` reads `DATABASE_URL` at import time and exposes `SessionLocal` + a `get_session()` FastAPI dependency.
+4. `backend/db/session.py` reads `DATABASE_URL` at import time and exposes `SessionLocal` + a `get_session()` FastAPI dependency.
 
 ## Status
 Schema written and matches `models.py` exactly. **Not yet applied** to the actual Supabase project — run step 2 above.
