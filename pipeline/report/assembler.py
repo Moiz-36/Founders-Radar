@@ -1,17 +1,19 @@
 """Assembles a week's scored signals into a Report record (section 4.5)."""
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import date
 
-import anthropic
+from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from pipeline.db.models import Competitor, Report, Signal, Source, TargetCompany
 
-MODEL = "claude-sonnet-5"
+# xAI's API is OpenAI-compatible — see pipeline/analysis/analyst.py.
+MODEL = "grok-4"
 
-_client = anthropic.Anthropic()
+_client = OpenAI(api_key=os.environ["XAI_API_KEY"], base_url="https://api.x.ai/v1")
 
 SUMMARY_SYSTEM_PROMPT = """You are a market intelligence analyst writing the \
 executive summary for a weekly competitor report. Given a list of this week's \
@@ -58,13 +60,15 @@ def generate_headline_and_summary(cards: list[SignalCard]) -> tuple[str, str]:
         f"- [{c.priority.upper()}] {c.competitor_name} ({c.source_type}): {c.what_changed}"
         for c in cards
     )
-    response = _client.messages.create(
+    response = _client.chat.completions.create(
         model=MODEL,
         max_tokens=512,
-        system=SUMMARY_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": signals_block or "(no signals this week)"}],
+        messages=[
+            {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": signals_block or "(no signals this week)"},
+        ],
     )
-    parsed = json.loads(response.content[0].text)
+    parsed = json.loads(response.choices[0].message.content)
     return parsed["headline"], parsed["executive_summary"]
 
 

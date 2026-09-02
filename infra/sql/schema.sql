@@ -30,7 +30,7 @@ CREATE TABLE snapshots (
     source_id UUID REFERENCES sources(id),
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
-    embedding VECTOR(1536),
+    embedding VECTOR(384),  -- local sentence-transformers all-MiniLM-L6-v2 (see pipeline/detection/change_detector.py)
     fetched_at TIMESTAMPTZ DEFAULT now()
 );
 

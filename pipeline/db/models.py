@@ -8,7 +8,7 @@ from sqlalchemy import ARRAY, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-EMBEDDING_DIM = 1536  # matches OpenAI text-embedding-3-small
+EMBEDDING_DIM = 384  # matches local sentence-transformers all-MiniLM-L6-v2 (see detection/change_detector.py)
 
 
 class Base(DeclarativeBase):

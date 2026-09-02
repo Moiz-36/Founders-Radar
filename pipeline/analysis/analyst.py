@@ -7,18 +7,21 @@ before being persisted.
 """
 
 import json
+import os
 from dataclasses import dataclass
 
-import anthropic
+from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pipeline.db.models import Snapshot, Source
 
-MODEL = "claude-sonnet-5"
+# xAI's API is OpenAI-compatible, so we reuse the `openai` SDK pointed at
+# their endpoint instead of pulling in a separate xAI client library.
+MODEL = "grok-4"
 RETRIEVAL_TOP_K = 3
 
-_client = anthropic.Anthropic()
+_client = OpenAI(api_key=os.environ["XAI_API_KEY"], base_url="https://api.x.ai/v1")
 
 SYSTEM_PROMPT = """You are a market intelligence analyst. Given an old and new \
 version of a competitor's source content, and some related historical context, \
@@ -73,14 +76,16 @@ NEW CONTENT:
 RELATED HISTORICAL CONTEXT:
 {context_block}"""
 
-    response = _client.messages.create(
+    response = _client.chat.completions.create(
         model=MODEL,
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
     )
 
-    parsed = json.loads(response.content[0].text)
+    parsed = json.loads(response.choices[0].message.content)
     return AnalystOutput(
         what_changed=parsed["what_changed"],
         why_it_matters=parsed["why_it_matters"],

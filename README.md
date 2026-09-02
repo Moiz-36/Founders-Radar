@@ -21,7 +21,7 @@ Collectors → Change Detector → Analyst (RAG + LLM) → Scorer → Report Ass
 
 ## Stack
 
-FastAPI · PostgreSQL + pgvector (Supabase) · SQLAlchemy · BeautifulSoup / Playwright · OpenAI embeddings · Claude (analyst) · matplotlib · WeasyPrint · Next.js (Vercel)
+FastAPI · PostgreSQL + pgvector (Supabase) · SQLAlchemy · BeautifulSoup / Playwright · local sentence-transformers embeddings (free, no API key) · Grok/xAI (analyst) · matplotlib · WeasyPrint · Next.js (Vercel)
 
 The pipeline (scraping/detection/analysis/rendering) is fully decoupled from the frontend — Vercel only ever reads a *finished* report from Supabase; it never runs scraping or generation.
 
@@ -37,18 +37,18 @@ infra/          # Cloud Function + Cloud Scheduler config, SQL schema
 ## Running it locally
 
 ```bash
-# Pipeline
-cd pipeline
-pip install -r requirements.txt
-playwright install chromium
-cp ../.env.example ../.env   # fill in DATABASE_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
-uvicorn pipeline.main:app --reload
+# Pipeline (requires Python 3.12 — 3.14 is too new, several deps have no wheels for it yet)
+py -3.12 -m venv .venv
+./.venv/Scripts/pip install -r pipeline/requirements.txt
+./.venv/Scripts/python -m playwright install chromium
+cp .env.example .env   # fill in DATABASE_URL (postgresql+psycopg://...) and XAI_API_KEY
+./.venv/Scripts/uvicorn pipeline.main:app --reload
 
-# Database (once, against a fresh Supabase project)
+# Database (once, against your Supabase project)
 psql "$DATABASE_URL" -f infra/sql/schema.sql
 
 # Eval
-python -m eval.run_eval
+./.venv/Scripts/python -m eval.run_eval
 
 # Frontend
 cd frontend
@@ -57,9 +57,13 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
+No OpenAI account needed — embeddings run locally via `sentence-transformers` at zero cost.
+
 ## Status
 
-Pipeline skeleton is scaffolded end-to-end; not yet run against real data. Open items before the first real report can be generated:
+Pipeline is scaffolded end-to-end and dependencies install cleanly. Report generation (charts + PDF) has been smoke-tested with fake signal data and works. Not yet run against real scraped data. Open items before the first real report can be generated:
 - Finalize the ComplyDo competitor list and exact source URLs
-- Populate `/eval` with real labeled examples and report an actual precision number
+- Populate `/eval` with real labeled examples and report an actual precision number (the current 0.98 similarity threshold is only calibrated on 2 synthetic placeholder examples — see `docs/decisions.md`)
 - Confirm final delivery format (PDF, webpage, or both)
+
+See [`docs/00-overview.md`](./docs/00-overview.md) for the full build plan and [`docs/decisions.md`](./docs/decisions.md) for every non-obvious choice made along the way.
