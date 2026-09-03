@@ -15,6 +15,11 @@ class NewsCollector(BaseCollector):
 
     source_type = "news"
 
+    def _robots_check_url(self) -> str:
+        # self.url is a search query (e.g. a competitor name), not a fetchable page —
+        # check robots.txt for the API host we actually hit instead.
+        return HN_SEARCH_URL
+
     def fetch_raw(self) -> str:
         response = self._get(
             url=f"{HN_SEARCH_URL}?query={self.url}&tags=story&hitsPerPage=20"

@@ -7,7 +7,7 @@ How Founder's Radar gets built, broken into one doc per feature/component. Each 
 | # | Doc | What it covers | Status |
 |---|-----|-----------------|--------|
 | 1 | [01-database.md](./01-database.md) | Supabase/Postgres schema, pgvector | Schema written, not yet applied to the real Supabase project |
-| 2 | [02-collectors.md](./02-collectors.md) | Scraping pricing/feature/jobs/news sources | Code written, still untested against real URLs — next real blocker |
+| 2 | [02-collectors.md](./02-collectors.md) | Scraping pricing/feature/jobs/news sources | **Verified against real sites** — all 7 ComplyDo-pilot sources fetch real content; 3 real bugs found & fixed (robots.txt UA, news-collector robots check, Cloudflare-protected page) |
 | 3 | [03-change-detection.md](./03-change-detection.md) | Embedding similarity, local model | Working — local model verified, threshold calibrated on synthetic data only |
 | 4 | [04-analyst-validator.md](./04-analyst-validator.md) | Groq-powered analysis + hallucination check | **Verified** — real end-to-end call tested against the live API |
 | 5 | [05-scoring.md](./05-scoring.md) | Priority rubric | Done — pure logic, no external deps |
@@ -17,7 +17,10 @@ How Founder's Radar gets built, broken into one doc per feature/component. Each 
 
 ## Current blocker
 
-Real competitor URLs for the ComplyDo pilot. Everything downstream of the collectors (change detection, analysis, scoring, report assembly) has been exercised with synthetic/fake data, but none of it has run against a real scraped page yet — that requires knowing which competitors and source URLs to point at. Once resolved, `.env` also needs `DATABASE_URL` (Supabase, `postgresql+psycopg://...`) and `GROQ_API_KEY` filled in before the pipeline can run for real.
+Schema applied, `.env` filled in, ComplyDo + Vanta + Drata seeded, all 7 collectors verified against real sites, and a **full real pipeline run completed end-to-end** for the first time (7 baseline snapshots stored, real Groq-generated summary, real PDF rendered) — see [decisions.md](./decisions.md), 2026-09-03 entries. What's left:
+1. A **second** real run is needed to actually see a signal detected — the first run only established baseline snapshots (nothing to diff against yet). Either wait for real content to change, or hand-edit a stored snapshot to simulate a change, to exercise detect→analyze→score end-to-end.
+2. Re-tune the change-detection similarity threshold (currently 0.98, calibrated on 2 synthetic examples) once real snapshot pairs exist.
+3. Decide a real scheduling cadence and wire up `infra/` (currently scaffolded, not deployed) so this runs weekly on its own instead of by hand.
 
 ## Repo layout
 
