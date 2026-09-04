@@ -63,3 +63,13 @@ CREATE TABLE reports (
 
 -- Speeds up pgvector similarity search used by analysis/analyst.py's RAG retrieval.
 CREATE INDEX ON snapshots USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- The frontend reads reports/signals with the public anon key (see docs/07-frontend.md) —
+-- Supabase enables RLS by default with zero policies, which silently returns no rows
+-- rather than erroring. Single-user portfolio project, no sensitive data, so a public
+-- read-only policy is enough; all writes go through the pipeline's direct DB connection
+-- (DATABASE_URL), not the anon key, so anon gets SELECT only.
+ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE signals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "public read access" ON reports FOR SELECT USING (true);
+CREATE POLICY "public read access" ON signals FOR SELECT USING (true);

@@ -61,9 +61,12 @@ No OpenAI account needed — embeddings run locally via `sentence-transformers` 
 
 ## Status
 
-Pipeline is scaffolded end-to-end and dependencies install cleanly. Report generation (charts + PDF) has been smoke-tested with fake signal data and works. Not yet run against real scraped data. Open items before the first real report can be generated:
-- Finalize the ComplyDo competitor list and exact source URLs
+Pipeline has run **end-to-end against real data**: collectors fetch real content from Vanta and Drata (the ComplyDo pilot's confirmed competitors), get embedded and stored, and a real Groq-generated report (headline, executive summary, charts, PDF) has been produced from real Supabase data. The frontend has also been verified against that same real report in a browser. See `docs/decisions.md` for the full trail, including three real scraping bugs (robots.txt handling, a Cloudflare-protected page) and a Supabase RLS gap that were found and fixed along the way — none of which synthetic/fake data would have surfaced.
+
+Open items before this is a fully unattended, ongoing pipeline:
+- A **second** real run to see an actual change get detected (the first run only established baseline snapshots)
 - Populate `/eval` with real labeled examples and report an actual precision number (the current 0.98 similarity threshold is only calibrated on 2 synthetic placeholder examples — see `docs/decisions.md`)
 - Confirm final delivery format (PDF, webpage, or both)
+- Deploy the Cloud Function + Scheduler (`infra/`) so this runs on its own instead of by hand
 
 See [`docs/00-overview.md`](./docs/00-overview.md) for the full build plan and [`docs/decisions.md`](./docs/decisions.md) for every non-obvious choice made along the way.
