@@ -27,9 +27,10 @@ A second, unrelated reason the deploy can't be a plain `gcloud functions deploy 
    gcloud run deploy founders-radar-pipeline \
      --image=<region>-docker.pkg.dev/<project>/<repo>/founders-radar-pipeline \
      --region=<region> --no-allow-unauthenticated \
-     --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url>,SUPABASE_URL=<url>,SUPABASE_SERVICE_ROLE_KEY=<key> \
-     --memory=1Gi --timeout=540s
+     --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url>,SUPABASE_URL=<url>,SUPABASE_SERVICE_ROLE_KEY=<key>,REDDIT_CLIENT_ID=<id>,REDDIT_CLIENT_SECRET=<secret> \
+     --memory=2Gi --cpu=2 --timeout=540s
    ```
+   `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET` are optional (community-signal collector degrades to HN-only without them — see `docs/decisions.md`'s 2026-09-10 entry). `--memory=2Gi --cpu=2`, not the `1Gi` an earlier version of this doc recommended — see the Status section below for why.
 3. Grant a dedicated service account `roles/run.invoker` on that service, then create the Cloud Scheduler job with OIDC auth pointed at it — full command in the comment block at the top of `infra/scheduler_config.yaml`.
 4. Fill in the real Cloud Run service URL and invoker service account email in `scheduler_config.yaml` once known.
 

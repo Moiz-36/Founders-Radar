@@ -40,6 +40,16 @@ Not designed in detail — contingent on Phases 1–3 actually working for real 
 1. Email provider (Phase 3) — Resend vs. Postmark, not yet confirmed.
 2. Whether Phase 1 ships for real public signups (needs production auth hardening — email verification, password reset) or stays a local/portfolio demo.
 
+### Status as of 2026-09-10
+Phases 1 and 2 are code-complete and verified live (auth incl. Google + GitHub OAuth, owner-scoped RLS, discovery, the full page map below). Deploy target resolved — GCP Cloud Run + Cloud Scheduler (`docs/08-infra-scheduling.md`), not the Render/Cloud Functions options considered earlier. Full detail and verification notes are in `docs/decisions.md`'s dated entries, most recently 2026-09-10.
+
+Beyond the original 4-phase plan, three features were added straight from `docs/10-competitive-feature-research.md`'s research pass rather than waiting for a formal Phase 3/4 slot, since they fit the existing architecture cheaply:
+- **Multi-competitor trend chart** (`frontend/components/TrendChart.tsx`) on the company page.
+- **Community signal tracking** (`backend/collectors/community_collector.py`) — a new `community` source type scanning HN + Reddit for buying-intent chatter, not just name mentions.
+- **A customizable dashboard** (`dashboard_widgets` table + `/dashboard/custom`) — not from the research doc, user-requested: mix feed/chart widgets from any tracked company on one page.
+
+One more fix landed alongside the dashboard work: `reports`/`signals` had kept their v1 single-tenant "public read" policy, which was a real cross-tenant data leak now that real users exist. Replaced with real report-level sharing (private by default, owner-controlled public toggle, or per-email invites) — see `docs/decisions.md`'s 2026-09-10 entry for the full RLS design.
+
 ---
 
 ## 2. User workflow
@@ -76,30 +86,29 @@ flowchart TD
 
 ## 3. Frontend page map
 
-v1 today has exactly **one** real page (`frontend/app/report/[id]/page.tsx`) plus a shared layout — there is no landing page, login, or dashboard yet.
+All of the following are built and live, except `/billing` (Phase 4, deferred). v1 originally had exactly one page (`/report/[id]`) — everything else here was added across the v2 sessions.
 
 | # | Route | Purpose | Status |
 |---|-------|---------|--------|
-| 1 | `/` | Landing / marketing page | New |
-| 2 | `/login` | Log in | New |
-| 3 | `/signup` | Sign up | New |
-| 4 | `/dashboard` | List of the user's tracked companies + report history | New |
-| 5 | `/company/new` (step 1) | Enter company name/website to start discovery | New |
-| 6 | `/company/new` (step 2) | Review/edit/confirm discovered competitors & sources | New (same route, wizard step) |
-| 7 | `/company/[id]` | Company detail: report history, manage sources, `needs_review` warnings | New |
-| 8 | `/report/[id]` | Individual report view (headline, summary, signal cards) | **Existing**, reused as-is |
-| 9 | `/settings` | Account settings, email notification preference | New |
+| 1 | `/` | Landing / marketing page | Built |
+| 2 | `/login` | Log in — email/password, Google, GitHub | Built |
+| 3 | `/signup` | Sign up — email/password (+ company name, job title), Google, GitHub | Built |
+| 4 | `/forgot-password`, `/reset-password` | Password reset flow | Built (not in the original plan; added mid-build) |
+| 5 | `/dashboard` | List of the user's tracked companies + report history | Built |
+| 6 | `/dashboard/custom` ("My Dashboard") | Customizable widget dashboard — feed/bar/line widgets from any tracked company, drag-to-reorder | Built (not in the original plan; added 2026-09-10) |
+| 7 | `/company/new` | Single-page wizard: name/website, discovery, review/edit, confirm | Built (collapsed the planned two-step wizard into one route+form) |
+| 8 | `/company/[id]` | Company detail: report history, competitor trend chart, manage sources, `needs_review`/`broken` warnings | Built |
+| 9 | `/report/[id]` | Individual report view — headline, summary, signal cards, owner-only Share panel (public/private, per-email invites) | Built, extended from the v1 original |
+| 10 | `/settings` | Account settings | Built |
 
-**Core product (Phases 1–3): 8 distinct routes, 9 screens** counting the two-step add-company wizard as two screens on one route.
+**Core product (Phases 1–3, plus the two additions above): 10 distinct routes.**
 
-**Phase 4 (optional, deferred)** adds one more:
+**Phase 4 (optional, deferred)** would add one more:
 
 | # | Route | Purpose | Status |
 |---|-------|---------|--------|
-| 10 | `/billing` | Plan/subscription management | New, deferred to Phase 4 |
-
-If Phase 4 is built: **9 routes, 10 screens** total.
+| 11 | `/billing` | Plan/subscription management | Not built, deferred to Phase 4 |
 
 ---
 
-*Plan approved 2026-09-04. Full phase detail with file-level notes lives in the plan file this was generated from; this document is the durable, repo-committed version of it.*
+*Plan approved 2026-09-04. Full phase detail with file-level notes lives in the plan file this was generated from; this document is the durable, repo-committed version of it. Status section and page map updated 2026-09-10 to match what's actually built — see `docs/decisions.md` for the verification trail.*

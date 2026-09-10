@@ -1,5 +1,7 @@
 # CLAUDE.md — Founder's Radar Project Context
 
+> **Superseded 2026-09-04 by the v2 pivot** — this is the original v1 planning brief, kept as-is for the historical record (the "Non-Goals" section below, in particular, no longer holds — auth/multi-tenancy/payments went from explicitly out-of-scope to built). For the current plan and status, see `docs/09-v2-plan.md` (plan/page map) and `docs/decisions.md` (dated build log, most recent entry 2026-09-10). The pipeline architecture described below (collectors → change detector → analyst → scorer → assembler) is still accurate — v2 builds a multi-tenant product on top of it, not a replacement.
+
 This file is the full context for building **Founder's Radar**, a market-intelligence pipeline that watches a startup's competitors and produces a weekly report. Read this fully before writing code. Ask clarifying questions if anything below is ambiguous rather than guessing.
 
 ---
