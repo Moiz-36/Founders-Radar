@@ -1,0 +1,33 @@
+# Build context for infra/cloud_function/Dockerfile is the repo root (see that file) — this
+# keeps `docker build` / `gcloud builds submit` from uploading everything else in the repo.
+
+# Not needed in the pipeline container at all
+frontend/
+docs/
+eval/
+.git/
+.claude/
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.venv/
+**/venv/
+**/.pytest_cache/
+
+# Environment (real secrets go in via --set-env-vars/--set-secrets, never baked into the image)
+.env
+.env.local
+*.env.local
+
+# Generated output
+backend/output/
+*.pdf
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

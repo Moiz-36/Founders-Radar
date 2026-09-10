@@ -1,16 +1,51 @@
-# Cloud Scheduler job config for the weekly pipeline run.
-# Deploy with:
-#   gcloud scheduler jobs create http founders-radar-weekly \
-#     --schedule="0 8 * * 1" \
-#     --uri="<cloud-function-url>" \
-#     --http-method=POST \
-#     --message-body='{"target_company_id": "<uuid>"}' \
-#     --time-zone="America/New_York"
+# Cloud Scheduler job config for the daily pipeline check.
+# Each user picks their own report_interval_days per company (docs/09-v2-plan.md) — this
+# job just needs to run at least as often as the shortest interval anyone's configured, so
+# it fires daily and backend/main.py's run_pipeline_for_all_active_companies() decides which
+# companies are actually due. An empty body (or one with no target_company_id) checks every
+# company — see infra/cloud_function/main.py. Pass a target_company_id only for a manual/
+# on-demand single-company trigger (bypasses the due check), not for this recurring job.
+#
+# Deployed as a Cloud Run service (via infra/cloud_function/Dockerfile), not a plain
+# `gcloud functions deploy` — see docs/08-infra-scheduling.md for why (Playwright/Chromium
+# needs a custom container GCP's default Python Cloud Functions runtime can't provide).
+#
+# 1. Build + push the image (repo root, not infra/cloud_function/ — see Dockerfile comment).
+#    `gcloud builds submit --tag ... -f <path>` does NOT exist — --tag always builds a plain
+#    `docker build -t $TAG .` against a Dockerfile at the source root, with no flag to point
+#    it elsewhere. Since the Dockerfile lives under infra/cloud_function/, use the explicit
+#    build config instead (see infra/cloud_function/cloudbuild.yaml for why):
+#      gcloud builds submit --config=infra/cloud_function/cloudbuild.yaml \
+#        --substitutions=_IMAGE=<region>-docker.pkg.dev/<project>/<repo>/founders-radar-pipeline .
+# 2. Deploy to Cloud Run, NOT publicly invokable — this endpoint triggers real Groq/Tavily
+#    calls and DB writes on every hit, so only Cloud Scheduler's own service account may call it:
+#      gcloud run deploy founders-radar-pipeline \
+#        --image=<region>-docker.pkg.dev/<project>/<repo>/founders-radar-pipeline \
+#        --region=<region> --no-allow-unauthenticated \
+#        --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url>,SUPABASE_URL=<url>,SUPABASE_SERVICE_ROLE_KEY=<key> \
+#        --memory=2Gi --cpu=2 --timeout=540s
+#    NOTE: 1Gi OOM'd on every cold start in production (Playwright/Chromium + the local
+#    embeddings model both loading at once used ~1050 MiB) — confirmed 2026-09-09, use 2Gi.
+#    Also: env vars were set via Secret Manager (--set-secrets=GROQ_API_KEY=GROQ_API_KEY:latest,...)
+#    in the actual deploy, not plain --set-env-vars — keeps secrets out of `services describe`.
+# 3. Grant a service account `roles/run.invoker` on that service, then create the job using
+#    it for OIDC auth (plain --uri/--http-method, no separate `gcloud functions deploy` step):
+#      gcloud scheduler jobs create http founders-radar-daily \
+#        --schedule="0 8 * * *" \
+#        --uri="<cloud-run-service-url>" \
+#        --http-method=POST \
+#        --message-body='{}' \
+#        --oidc-service-account-email=<scheduler-invoker>@<project>.iam.gserviceaccount.com \
+#        --time-zone="America/New_York"
 
-name: founders-radar-weekly
-schedule: "0 8 * * 1"        # every Monday at 08:00
+# Deployed 2026-09-08 in the `foundersradar` GCP project (a different project/account than
+# this repo's default gcloud config, which points at `compliance-scorer` — that's expected,
+# this pipeline's infra was set up under its own project). Verified working 2026-09-09 after
+# the 1Gi -> 2Gi memory fix above (HTTP 200, no OOM).
+name: founders-radar-daily
+schedule: "0 8 * * *"        # every day at 08:00
 time_zone: "America/New_York"
 http_method: POST
-uri: "<cloud-function-url>"  # filled in after `gcloud functions deploy`
-body:
-  target_company_id: "<uuid>"
+uri: "https://founders-radar-pipeline-934741006145.us-central1.run.app/"
+oidc_service_account_email: "scheduler-invoker@foundersradar.iam.gserviceaccount.com"
+body: {}

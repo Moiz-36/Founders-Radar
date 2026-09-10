@@ -16,10 +16,16 @@ MODEL = "openai/gpt-oss-120b"
 _client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
 
 SUMMARY_SYSTEM_PROMPT = """You are a market intelligence analyst writing the \
-executive summary for a weekly competitor report. Given a list of this week's \
-signals (what changed, why it matters, priority), write a headline (one short \
-sentence) and a 3-4 sentence executive summary that a busy founder can read in \
-15 seconds. Respond with ONLY a JSON object: {"headline": "...", "executive_summary": "..."}"""
+executive summary for a periodic competitor report (the reporting period varies \
+per company — don't assume it's a week). Given a list of signals from this \
+reporting period (what changed, why it matters, priority), write a headline (one \
+short sentence) and a 3-4 sentence executive summary that a busy founder can read \
+in 15 seconds. Entries marked [BASELINE] are the first-ever check of that source — \
+describe those as an initial finding establishing what's currently true, not as a \
+"change". Entries marked [CHANGE] are real detected changes since the last check — \
+describe those as changes. If every entry is [BASELINE], frame the whole summary as \
+an initial competitive snapshot, not a "nothing happened" report.
+Respond with ONLY a JSON object: {"headline": "...", "executive_summary": "..."}"""
 
 
 @dataclass
@@ -31,6 +37,7 @@ class SignalCard:
     suggested_response: str | None
     priority: str
     source_url: str
+    is_baseline: bool
 
 
 def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCard]:
@@ -47,6 +54,7 @@ def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCa
                 suggested_response=signal.suggested_response,
                 priority=signal.priority or "low",
                 source_url=source.url,
+                is_baseline=signal.is_baseline,
             )
         )
     # Highest priority first for the founder's scan order.
@@ -57,7 +65,8 @@ def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCa
 
 def generate_headline_and_summary(cards: list[SignalCard]) -> tuple[str, str]:
     signals_block = "\n".join(
-        f"- [{c.priority.upper()}] {c.competitor_name} ({c.source_type}): {c.what_changed}"
+        f"- [{'BASELINE' if c.is_baseline else 'CHANGE'}] [{c.priority.upper()}] "
+        f"{c.competitor_name} ({c.source_type}): {c.what_changed}"
         for c in cards
     )
     response = _client.chat.completions.create(
@@ -67,7 +76,7 @@ def generate_headline_and_summary(cards: list[SignalCard]) -> tuple[str, str]:
         extra_body={"reasoning_effort": "low"},
         messages=[
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-            {"role": "user", "content": signals_block or "(no signals this week)"},
+            {"role": "user", "content": signals_block or "(no signals this period)"},
         ],
     )
     parsed = json.loads(response.choices[0].message.content)
@@ -107,6 +116,9 @@ def assemble_report(
         executive_summary=executive_summary,
         signal_ids=[s.id for s in signals],
         chart_data=chart_data,
+        # Ownerless target companies (the ComplyDo pilot) stay public portfolio demos;
+        # every real tenant's report defaults to private (see infra/sql/schema.sql).
+        visibility="public" if target_company.owner_id is None else "private",
     )
     session.add(report)
     session.flush()

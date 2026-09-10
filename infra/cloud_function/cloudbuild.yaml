@@ -1,0 +1,26 @@
+# Cloud Build config for building the pipeline image from a non-root Dockerfile.
+#
+# `gcloud builds submit --tag=... -f <path>` does NOT exist — `--tag` always runs a plain
+# `docker build -t $TAG .` against a Dockerfile at the SOURCE ROOT, with no flag to point it
+# elsewhere (confirmed via `gcloud builds submit --help`). Since infra/cloud_function/Dockerfile
+# intentionally lives one level down (see that file's own top comment for why), this explicit
+# build config is required instead of the `--tag` shorthand.
+#
+# Usage (from the repo root, so `backend/` is in the build context):
+#   gcloud builds submit --config=infra/cloud_function/cloudbuild.yaml \
+#     --substitutions=_IMAGE=us-central1-docker.pkg.dev/<project-id>/founders-radar/founders-radar-pipeline .
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_IMAGE}"
+      - "-f"
+      - "infra/cloud_function/Dockerfile"
+      - "."
+images:
+  - "${_IMAGE}"
+substitutions:
+  _IMAGE: "us-central1-docker.pkg.dev/PROJECT_ID/founders-radar/founders-radar-pipeline"
+options:
+  logging: CLOUD_LOGGING_ONLY

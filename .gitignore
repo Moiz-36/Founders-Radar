@@ -15,6 +15,7 @@ node_modules/
 frontend/.next/
 frontend/out/
 frontend/.vercel/
+frontend/tsconfig.tsbuildinfo
 
 # Reports / generated output
 backend/output/

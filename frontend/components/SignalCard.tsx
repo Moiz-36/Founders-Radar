@@ -6,8 +6,11 @@ export function SignalCard({ signal }: { signal: Signal }) {
   return (
     <div className="card">
       <div className="card-header">
-        <strong>What changed</strong>
-        <span className={`priority priority-${priority}`}>{priority}</span>
+        <strong>{signal.is_baseline ? "What we found" : "What changed"}</strong>
+        <span>
+          {signal.is_baseline && <span className="baseline-badge">baseline</span>}
+          <span className={`priority priority-${priority}`}>{priority}</span>
+        </span>
       </div>
       <div>{signal.what_changed}</div>
 

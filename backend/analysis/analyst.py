@@ -41,6 +41,20 @@ Respond with ONLY a JSON object with these exact keys:
   "suggested_response": "<optional concrete suggestion, or null if none>"
 }"""
 
+BASELINE_SYSTEM_PROMPT = """You are a market intelligence analyst. This is the FIRST time \
+this competitor source has ever been checked — there is nothing to compare it against yet, \
+so do not describe a "change". Instead, summarize what is currently there in enough factual \
+detail that a founder tracking this competitor has a useful baseline (e.g. actual pricing \
+tiers and figures, specific features listed, roles being hired for, or the news item found — \
+whatever is relevant to this source type).
+
+Respond with ONLY a JSON object with these exact keys:
+{
+  "what_changed": "<factual, specific summary of what is currently there>",
+  "why_it_matters": "<why this matters strategically to a competing founder>",
+  "suggested_response": "<optional concrete suggestion, or null if none>"
+}"""
+
 
 @dataclass
 class AnalystOutput:
@@ -89,6 +103,46 @@ RELATED HISTORICAL CONTEXT:
         extra_body={"reasoning_effort": "low"},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+    )
+
+    parsed = json.loads(response.choices[0].message.content)
+    return AnalystOutput(
+        what_changed=parsed["what_changed"],
+        why_it_matters=parsed["why_it_matters"],
+        suggested_response=parsed.get("suggested_response"),
+    )
+
+
+def summarize_baseline(
+    source: Source,
+    content: str,
+    related_context: list[Snapshot],
+) -> AnalystOutput:
+    """Like analyze_change, but for the first time a source is ever collected — there's no
+    prior version to diff against, so this describes the current content as a baseline finding
+    instead of a change. Reuses AnalystOutput/validate_signal/score_signal downstream (see
+    is_baseline on Signal) rather than a parallel pipeline for what is otherwise the same shape
+    of output."""
+    context_block = "\n---\n".join(s.content[:1000] for s in related_context) or "(none)"
+
+    user_message = f"""Source type: {source.source_type}
+Source URL: {source.url}
+
+CURRENT CONTENT:
+{content[:4000]}
+
+RELATED HISTORICAL CONTEXT:
+{context_block}"""
+
+    response = _client.chat.completions.create(
+        model=MODEL,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        extra_body={"reasoning_effort": "low"},
+        messages=[
+            {"role": "system", "content": BASELINE_SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ],
     )

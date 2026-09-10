@@ -1,2 +1,6 @@
 functions-framework==3.8.2
--r ../../backend/requirements.txt
+# backend's own dependencies are installed separately from backend/requirements.txt directly
+# (see infra/cloud_function/Dockerfile) — a relative `-r ../../backend/requirements.txt` here
+# only resolves when pip is run from inside this directory, which broke once the deploy became
+# a repo-root Docker build. Keep this file to functions-framework (and anything specific to
+# the Cloud Run/Functions entrypoint) only.

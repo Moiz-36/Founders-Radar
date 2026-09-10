@@ -1,4 +1,5 @@
 from backend.collectors.base import BaseCollector, CollectedContent
+from backend.collectors.community_collector import CommunityCollector
 from backend.collectors.feature_collector import FeatureCollector
 from backend.collectors.jobs_collector import JobsCollector
 from backend.collectors.news_collector import NewsCollector
@@ -9,6 +10,7 @@ COLLECTOR_BY_SOURCE_TYPE = {
     "feature": FeatureCollector,
     "job_posting": JobsCollector,
     "news": NewsCollector,
+    "community": CommunityCollector,
 }
 
 __all__ = [
@@ -18,5 +20,6 @@ __all__ = [
     "FeatureCollector",
     "JobsCollector",
     "NewsCollector",
+    "CommunityCollector",
     "COLLECTOR_BY_SOURCE_TYPE",
 ]
