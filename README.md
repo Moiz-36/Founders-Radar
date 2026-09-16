@@ -4,9 +4,9 @@ A market-intelligence platform that tracks a company's competitors — pricing, 
 
 ## Why this exists
 
-This started as a personalized, unsolicited demo built for a real startup founder (pilot target: **ComplyDo**, a compliance-automation company) — a small, single-company pipeline meant to demonstrate technical and product judgment, not to compete with commercial tools in this space (Competely, Cassidy AI, Signum.AI).
+This started as a small, single-company pipeline built as a personalized, unsolicited demo — a way to show real technical and product judgment on a real problem, not a from-scratch attempt to out-build the commercial competitive-intelligence tools that already exist in this space.
 
-After that pilot shipped end-to-end against real data, it was rebuilt into a real multi-tenant product: any logged-in user can track their own set of companies, with AI-assisted (human-reviewed) competitor/source discovery instead of hand-curated data. See `docs/09-v2-plan.md` for the pivot's plan and `docs/decisions.md` for the full build log. It's still published as a portfolio piece, not a company — code quality, README clarity, and commit hygiene matter for the same reason as before.
+After that first version worked end-to-end against real data, it was rebuilt into a real multi-tenant product: any signed-in user can track their own set of companies, with AI-assisted (human-reviewed) competitor/source discovery instead of hand-curated data. See `docs/09-v2-plan.md` for the pivot's plan and `docs/decisions.md` for the full build log. It's still a solo-built portfolio project, not a company — code quality, README clarity, and commit hygiene matter for the same reason as before.
 
 ## How it works
 
