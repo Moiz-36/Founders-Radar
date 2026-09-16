@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { pipelineHeaders } from "@/lib/pipelineFetch";
 import { createClient } from "@/lib/supabase/server";
 
 // Triggers an immediate pipeline run for one company. Runs server-side only — the pipeline's
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   try {
-    const response = await fetch(`${pipelineBaseUrl}/run/${id}`, { method: "POST" });
+    const response = await fetch(`${pipelineBaseUrl}/run/${id}`, { method: "POST", headers: pipelineHeaders() });
     if (!response.ok) {
       return NextResponse.json({ error: "Pipeline run failed" }, { status: 502 });
     }

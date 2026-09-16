@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { pipelineHeaders } from "@/lib/pipelineFetch";
 import { createClient } from "@/lib/supabase/server";
 
 // Server-side only, same reasoning as app/api/companies/[id]/run: the pipeline's discovery
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest) {
   try {
     const response = await fetch(`${pipelineBaseUrl}/discover/competitors`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: pipelineHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!response.ok) {

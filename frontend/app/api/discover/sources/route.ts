@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { pipelineHeaders } from "@/lib/pipelineFetch";
 import { createClient } from "@/lib/supabase/server";
 
 // See app/api/discover/competitors/route.ts for why this only checks auth, not ownership.
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
   try {
     const response = await fetch(`${pipelineBaseUrl}/discover/sources`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: pipelineHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!response.ok) {

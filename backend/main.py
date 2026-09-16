@@ -6,11 +6,12 @@ scheduled Cloud Function without going through HTTP at all.
 """
 
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -43,6 +44,29 @@ logger = logging.getLogger("founders_radar.pipeline")
 app = FastAPI(title="Founder's Radar Pipeline")
 
 OUTPUT_DIR = Path(__file__).parent / "output"
+
+# Every route below other than /health has "no auth of its own" by design — see the
+# comments on frontend/app/api/*/route.ts, which are what actually enforce ownership/session
+# checks before ever calling here. That was a safe assumption while this service was only
+# reachable via GCP's private (--no-allow-unauthenticated) Cloud Run invocation; it stops
+# being safe the moment this is deployed somewhere public like Render, where anyone who finds
+# the URL could hit /run/{id} or /discover/* directly and trigger real Groq/Tavily calls and
+# DB writes for free. PIPELINE_SHARED_SECRET closes that gap without touching every route's
+# own signature: unset (the local-dev default), this is a no-op; set it here and in the
+# frontend's own server-only env (see frontend/app/api/*/route.ts), and only requests
+# carrying the matching header get through.
+PIPELINE_SHARED_SECRET = os.environ.get("PIPELINE_SHARED_SECRET")
+
+
+@app.middleware("http")
+async def require_shared_secret(request: Request, call_next):
+    if (
+        PIPELINE_SHARED_SECRET
+        and request.url.path != "/health"
+        and request.headers.get("x-pipeline-secret") != PIPELINE_SHARED_SECRET
+    ):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/health")

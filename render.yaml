@@ -1,0 +1,59 @@
+# Render Blueprint — deploys the FastAPI pipeline app (backend/main.py) as a public web
+# service, plus a daily cron job for scheduled report generation (the Render equivalent of
+# infra/scheduler_config.yaml's GCP Cloud Scheduler setup, which this does not replace —
+# that's a separate, already-live deployment; see docs/decisions.md).
+#
+# IMPORTANT — instance size: GCP's Cloud Run deployment of this same backend OOM'd in
+# production at 1Gi (Playwright/Chromium + the local sentence-transformers embeddings model
+# together use ~1050MiB) and needed 2Gi to run reliably (see infra/scheduler_config.yaml).
+# Render's free/starter plans (512MB) WILL crash under the same load. No `plan:` is set below
+# on purpose — pick at least a 2GB-memory plan for both services when applying this Blueprint
+# in the Render dashboard, rather than silently defaulting to something too small (or too
+# expensive) on your behalf.
+#
+# Secrets (every `sync: false` var below) are NOT set here — Render prompts for each one in
+# the dashboard when you apply this Blueprint. Same values as backend/.env.example, plus the
+# new PIPELINE_SHARED_SECRET (see backend/main.py's require_shared_secret middleware): pick
+# any long random string, set the identical value here AND as Vercel's PIPELINE_SHARED_SECRET
+# env var — it's what stops a stranger who finds this service's URL from triggering real
+# Groq/Tavily calls and DB writes for free, now that this is a public host instead of GCP's
+# private Cloud Run invocation.
+services:
+  - type: web
+    name: founders-radar-backend
+    runtime: docker
+    dockerfilePath: infra/render/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: PIPELINE_SHARED_SECRET
+        sync: false
+
+  - type: cron
+    name: founders-radar-scheduler
+    runtime: docker
+    dockerfilePath: infra/render/Dockerfile
+    dockerContext: .
+    schedule: "0 8 * * *"
+    dockerCommand: python -m backend.cron_run_all
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false

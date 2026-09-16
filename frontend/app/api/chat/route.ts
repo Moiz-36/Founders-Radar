@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { pipelineHeaders } from "@/lib/pipelineFetch";
 import { createClient } from "@/lib/supabase/server";
 
 type ChatScope = "report" | "company";
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
   try {
     response = await fetch(`${pipelineBaseUrl}/chat/${scope}/${id}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: pipelineHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ question }),
     });
   } catch {
