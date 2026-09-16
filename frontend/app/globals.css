@@ -1,8 +1,72 @@
+@import "tailwindcss";
+
+/* Manual light/dark toggle (ThemeToggle.tsx sets .dark on <html>) instead of Tailwind v4's
+   default prefers-color-scheme-only `dark:` variant. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-heading: var(--font-plus-jakarta), var(--font-inter), ui-sans-serif, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* DESIGN.md's "Colors" section (the authoritative hex values — its YAML frontmatter carries
+     a separate, conflicting generic Material-3 token set from an earlier pass; the prose
+     section below it is the one actually referenced by every component spec, so that's what
+     these follow). Named to avoid collision with Tailwind's own `primary`/etc. defaults. */
+  --color-brand: #0b57d0;
+  --color-brand-hover: #0842a0;
+  --color-accent-teal: #007a82;
+  --color-accent-amber: #d97706;
+
+  --color-ink: #202124;
+  --color-ink-dark: #e8eaed;
+  --color-ink-muted: #5f6368;
+  --color-ink-muted-dark: #9aa0a6;
+
+  --color-canvas: #ffffff;
+  --color-canvas-dim: #f8f9fa;
+  --color-canvas-dark: #131314;
+  --color-surface-dark: #1e1f22;
+  --color-hover: #f1f3f4;
+  --color-hover-dark: #282a2d;
+  --color-border: #e8eaed;
+  --color-border-dark: #3c4043;
+
+  /* Status/semantic — light values are DESIGN.md's exact badge specs; dark values are this
+     session's own extension (DESIGN.md only fully specifies the light badge triad), built the
+     same way as its one worked dark example (Semantic Indicators): a darker, desaturated bg
+     paired with the lighter "dark mode" accent hex as the text/border color. */
+  --color-critical: #d93025;
+  --color-critical-bg: #fce8e6;
+  --color-critical-border: #fad2cf;
+  --color-critical-dark: #f28b82;
+  --color-critical-bg-dark: #3c1f1d;
+  --color-critical-border-dark: #5c2b28;
+
+  --color-warning: #b06000;
+  --color-warning-bg: #fef7e0;
+  --color-warning-border: #feefc3;
+  --color-warning-dark: #fdd663;
+  --color-warning-bg-dark: #3a2e10;
+  --color-warning-border-dark: #52430f;
+
+  --color-positive: #137333;
+  --color-positive-bg: #e6f4ea;
+  --color-positive-border: #ceead6;
+  --color-positive-dark: #81c995;
+  --color-positive-bg-dark: #16281d;
+  --color-positive-border-dark: #234630;
+
+  --color-info: #1967d2;
+  --color-info-bg: #e8f0fe;
+  --color-info-border: #d2e3fc;
+  --color-info-dark: #8ab4f8;
+  --color-info-bg-dark: #1a2a3f;
+  --color-info-border-dark: #294261;
+}
+
 :root {
   --ink: #1a1f27;
-  --muted: #5b6472;
-  --border: #d8dde3;
-  --accent: #2c3e50;
 }
 
 * { box-sizing: border-box; }
@@ -10,240 +74,18 @@
 body {
   margin: 0;
   color: var(--ink);
-  font-family: Georgia, "Times New Roman", serif;
   background: #fff;
 }
 
-.report {
-  max-width: 760px;
-  margin: 3rem auto;
-  padding: 0 1.5rem;
-}
+/* Un-layered rules above always win over Tailwind's layered utilities regardless of
+   specificity (CSS cascade layers put "no layer" ahead of any layer) — every page/component
+   sets its own font/background/color via Tailwind classes on its own elements rather than
+   relying on inheriting these, so this only matters for `body` itself: .font-sans (applied to
+   <body> in layout.tsx) needs body's own font-family rule gone, or it would never win against
+   this file's un-layered one on the same element.
+   Same reasoning is why this file doesn't set a `background`/`color` via `dark:` utilities on
+   body — every page controls its own background on its own top-level wrapper div instead.
+   The pre-Tailwind v1 stylesheet (.hero/.btn/.page/.auth-page/etc.) that used to follow this
+   comment was deleted once the last page depending on it (settings) was migrated — see
+   docs/decisions.md's 2026-09-15 entry. */
 
-.headline { font-family: Helvetica, Arial, sans-serif; font-size: 1.8rem; margin-bottom: 0.2rem; }
-
-.subtitle {
-  font-family: Helvetica, Arial, sans-serif;
-  color: var(--muted);
-  font-size: 0.85rem;
-  margin-bottom: 1.6rem;
-}
-
-.summary {
-  background: #f4f6f9;
-  border-left: 3px solid var(--accent);
-  padding: 1rem 1.2rem;
-  margin-bottom: 2rem;
-  line-height: 1.5;
-}
-
-.card {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.2rem;
-  margin-bottom: 1rem;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-family: Helvetica, Arial, sans-serif;
-}
-
-.priority {
-  font-family: Helvetica, Arial, sans-serif;
-  font-size: 0.7rem;
-  font-weight: bold;
-  padding: 0.15rem 0.6rem;
-  border-radius: 3px;
-  text-transform: uppercase;
-}
-
-.priority-high { background: #f6d3d3; color: #8a1f1f; }
-.priority-medium { background: #f5e3b3; color: #7a5c00; }
-.priority-low { background: #dde5ee; color: #3a4a5c; }
-
-.baseline-badge {
-  font-family: Helvetica, Arial, sans-serif;
-  font-size: 0.7rem;
-  font-weight: bold;
-  padding: 0.15rem 0.6rem;
-  border-radius: 3px;
-  text-transform: uppercase;
-  background: #e3ddf5;
-  color: #4b2e83;
-  margin-right: 0.4rem;
-}
-
-.field-label {
-  font-family: Helvetica, Arial, sans-serif;
-  font-size: 0.75rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  margin-top: 0.6rem;
-}
-
-/* v2: shared UI primitives (dashboard, auth, company management) */
-
-.page {
-  max-width: 760px;
-  margin: 3rem auto;
-  padding: 0 1.5rem;
-  font-family: Helvetica, Arial, sans-serif;
-}
-
-.nav {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 1.2rem 1.5rem;
-  font-family: Helvetica, Arial, sans-serif;
-  border-bottom: 1px solid var(--border);
-}
-
-.nav a { color: var(--ink); text-decoration: none; }
-.nav a:hover { color: var(--accent); }
-
-.nav-brand { font-family: Georgia, serif; font-size: 1.1rem; font-weight: bold; }
-
-.nav-links { display: flex; gap: 1.2rem; font-size: 0.9rem; color: var(--muted); }
-
-.page h1 { font-family: Georgia, serif; font-size: 1.6rem; margin-bottom: 0.3rem; }
-
-.page-subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
-
-.btn {
-  display: inline-block;
-  font-family: Helvetica, Arial, sans-serif;
-  font-size: 0.85rem;
-  font-weight: bold;
-  padding: 0.55rem 1.1rem;
-  border-radius: 5px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.btn:hover { opacity: 0.9; }
-
-.btn-secondary {
-  background: #fff;
-  color: var(--accent);
-}
-
-.btn-text {
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-size: 0.85rem;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-}
-
-.input, select.input {
-  display: block;
-  width: 100%;
-  font-family: Helvetica, Arial, sans-serif;
-  font-size: 0.9rem;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  margin-top: 0.3rem;
-  margin-bottom: 1rem;
-}
-
-.form-error {
-  background: #f6d3d3;
-  color: #8a1f1f;
-  border-radius: 5px;
-  padding: 0.6rem 0.8rem;
-  font-size: 0.85rem;
-  margin-bottom: 1rem;
-}
-
-.auth-page {
-  max-width: 360px;
-  margin: 5rem auto;
-  padding: 0 1.5rem;
-  font-family: Helvetica, Arial, sans-serif;
-}
-
-.list-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.9rem 1.1rem;
-  margin-bottom: 0.7rem;
-  text-decoration: none;
-  color: var(--ink);
-}
-
-.list-item:hover { border-color: var(--accent); }
-
-.list-item-title { font-weight: bold; }
-.list-item-meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.15rem; }
-
-.empty-state {
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  padding: 2rem;
-  text-align: center;
-  color: var(--muted);
-}
-
-.status-badge {
-  font-size: 0.7rem;
-  font-weight: bold;
-  padding: 0.1rem 0.5rem;
-  border-radius: 3px;
-  text-transform: uppercase;
-}
-
-.status-active { background: #dbeee0; color: #1f6d34; }
-.status-broken { background: #f6d3d3; color: #8a1f1f; }
-.status-needs_review { background: #f5e3b3; color: #7a5c00; }
-
-.source-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.9rem;
-}
-
-.competitor-group {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.2rem;
-  margin-bottom: 1rem;
-}
-
-.hero {
-  max-width: 640px;
-  margin: 6rem auto;
-  padding: 0 1.5rem;
-  text-align: center;
-}
-
-.hero h1 {
-  font-family: Georgia, serif;
-  font-size: 2.4rem;
-  margin-bottom: 0.8rem;
-}
-
-.hero p {
-  font-family: Helvetica, Arial, sans-serif;
-  color: var(--muted);
-  font-size: 1.05rem;
-  line-height: 1.5;
-  margin-bottom: 2rem;
-}

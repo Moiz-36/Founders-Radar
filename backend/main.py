@@ -9,14 +9,25 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.analysis.analyst import analyze_change, retrieve_related_context, summarize_baseline
 from backend.analysis.validator import validate_signal
+from backend.chat.qa import (
+    ChatMessage,
+    CompetitorSummary,
+    SignalContext,
+    SnapshotContext,
+    build_company_system_prompt,
+    build_report_system_prompt,
+    stream_answer,
+)
 from backend.collectors import COLLECTOR_BY_SOURCE_TYPE
-from backend.db.models import Report, Signal, Snapshot, Source, TargetCompany
+from backend.db.models import ChatMessage as ChatMessageRow
+from backend.db.models import Competitor, Report, Signal, Snapshot, Source, TargetCompany
 from backend.db.session import SessionLocal
 from backend.detection.change_detector import embed, is_real_change
 from backend.discovery import find_competitors, find_sources
@@ -68,6 +79,227 @@ def discover_sources(body: DiscoverSourcesRequest) -> dict:
     """Proposes candidate source URLs for one competitor — same review-before-save flow."""
     candidates = find_sources(body.competitor_name, body.website)
     return {"sources": [c.__dict__ for c in candidates]}
+
+
+class ChatRequest(BaseModel):
+    question: str
+
+
+# Per report/company, per hour. A generous cap for real usage, but a message here is a live
+# Groq call (unlike the weekly pipeline run's fixed cost) — this bounds runaway cost/abuse.
+CHAT_RATE_LIMIT_PER_HOUR = 30
+# How many past messages to load from chat_messages for context — matches
+# backend/chat/qa.py's HISTORY_TURNS_KEPT (fetch exactly what will be used, no more).
+CHAT_HISTORY_ROWS = 6
+
+
+def _check_chat_rate_limit(session, scope: str, subject_id: str) -> None:
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    count = session.execute(
+        select(func.count())
+        .select_from(ChatMessageRow)
+        .where(
+            ChatMessageRow.scope == scope,
+            ChatMessageRow.subject_id == subject_id,
+            ChatMessageRow.role == "user",
+            ChatMessageRow.created_at >= since,
+        )
+    ).scalar_one()
+    if count >= CHAT_RATE_LIMIT_PER_HOUR:
+        raise HTTPException(
+            status_code=429, detail=f"Rate limit reached: max {CHAT_RATE_LIMIT_PER_HOUR} questions/hour"
+        )
+
+
+def _load_chat_history(session, scope: str, subject_id: str) -> list[ChatMessage]:
+    rows = session.execute(
+        select(ChatMessageRow)
+        .where(ChatMessageRow.scope == scope, ChatMessageRow.subject_id == subject_id)
+        .order_by(ChatMessageRow.created_at.desc())
+        .limit(CHAT_HISTORY_ROWS)
+    ).scalars().all()
+    rows.reverse()
+    return [ChatMessage(role=r.role, content=r.content) for r in rows]
+
+
+def _stream_chat_answer(
+    session, scope: str, subject_id: str, system_prompt: str, history: list[ChatMessage], question: str
+) -> StreamingResponse:
+    """Streams the answer token-by-token, then persists it once generation finishes. The
+    session stays open past this function's return — StreamingResponse pulls from `generate()`
+    lazily, after the route handler itself has already returned — so it's closed inside the
+    generator's own `finally`, not by the route."""
+
+    def generate():
+        chunks: list[str] = []
+        try:
+            for delta in stream_answer(system_prompt, history, question):
+                chunks.append(delta)
+                yield delta
+        except Exception:
+            logger.exception("Chat generation failed (%s %s)", scope, subject_id)
+            if not chunks:
+                yield "Sorry, something went wrong answering that. Please try again."
+        finally:
+            answer = "".join(chunks)
+            if answer:
+                session.add(ChatMessageRow(scope=scope, subject_id=subject_id, role="assistant", content=answer))
+                session.commit()
+            session.close()
+
+    return StreamingResponse(generate(), media_type="text/plain")
+
+
+@app.post("/chat/report/{report_id}")
+def chat_about_report(report_id: str, body: ChatRequest) -> StreamingResponse:
+    """Report-scoped Q&A (Phase 1 — see docs/decisions.md). No auth here: the Next.js
+    /api/chat route already checked the caller can see this report (owner or shared/public,
+    via an RLS-scoped Supabase query) before ever calling this endpoint — same trust model
+    as /run and /discover/*."""
+    session = SessionLocal()
+    try:
+        report = session.get(Report, report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        _check_chat_rate_limit(session, "report", report_id)
+        history = _load_chat_history(session, "report", report_id)
+
+        signals = session.execute(
+            select(Signal).where(Signal.id.in_(report.signal_ids or []))
+        ).scalars().all()
+
+        signal_contexts = [
+            SignalContext(
+                competitor_name=s.source.competitor.name,
+                source_type=s.source.source_type,
+                source_url=s.source.url,
+                priority=s.priority,
+                is_baseline=s.is_baseline,
+                what_changed=s.what_changed,
+                why_it_matters=s.why_it_matters,
+                suggested_response=s.suggested_response,
+                old_content=s.old_snapshot.content if s.old_snapshot else None,
+                new_content=s.new_snapshot.content if s.new_snapshot else None,
+            )
+            for s in signals
+        ]
+
+        system_prompt = build_report_system_prompt(
+            headline=report.headline,
+            week_start=str(report.week_start),
+            week_end=str(report.week_end),
+            executive_summary=report.executive_summary,
+            signals=signal_contexts,
+        )
+
+        session.add(ChatMessageRow(scope="report", subject_id=report.id, role="user", content=body.question))
+        session.commit()
+
+        return _stream_chat_answer(session, "report", str(report.id), system_prompt, history, body.question)
+    except Exception:
+        session.close()
+        raise
+
+
+# How many of a company's most recent signals (across all competitors) to always include for
+# orientation-type questions ("anything new this month?") that semantic search alone wouldn't
+# surface well, since they're not about one specific fact. Kept small to control prompt tokens.
+COMPANY_CHAT_RECENT_SIGNALS = 8
+# How many snapshots to pull via pgvector similarity search against the question's own
+# embedding — the actual RAG step that lets this scope answer specific factual questions a
+# fixed recent-signals list can't ("what's Drata's current pricing?").
+COMPANY_CHAT_RELEVANT_SNAPSHOTS = 5
+
+
+@app.post("/chat/company/{target_company_id}")
+def chat_about_company(target_company_id: str, body: ChatRequest) -> StreamingResponse:
+    """Company-wide Q&A (Phase 2 — see docs/decisions.md). Same trust model as
+    /chat/report/{report_id}: the Next.js /api/chat route already checked the caller owns this
+    company (target_companies RLS is owner-only, no sharing) before calling this endpoint."""
+    session = SessionLocal()
+    try:
+        target_company = session.get(TargetCompany, target_company_id)
+        if target_company is None:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        _check_chat_rate_limit(session, "company", target_company_id)
+        history = _load_chat_history(session, "company", target_company_id)
+
+        competitors = session.execute(
+            select(Competitor).where(Competitor.target_company_id == target_company_id)
+        ).scalars().all()
+        competitor_ids = [c.id for c in competitors]
+
+        competitor_summaries = [
+            CompetitorSummary(name=c.name, website=c.website, is_self=c.is_self) for c in competitors
+        ]
+
+        recent_signal_rows: list[Signal] = []
+        relevant_snapshot_rows: list[Snapshot] = []
+        if competitor_ids:
+            recent_signal_rows = session.execute(
+                select(Signal)
+                .join(Signal.source)
+                .where(Source.competitor_id.in_(competitor_ids))
+                .order_by(Signal.created_at.desc())
+                .limit(COMPANY_CHAT_RECENT_SIGNALS)
+            ).scalars().all()
+
+            question_embedding = embed(body.question)
+            relevant_snapshot_rows = session.execute(
+                select(Snapshot)
+                .join(Snapshot.source)
+                .where(Source.competitor_id.in_(competitor_ids))
+                .order_by(Snapshot.embedding.cosine_distance(question_embedding))
+                .limit(COMPANY_CHAT_RELEVANT_SNAPSHOTS)
+            ).scalars().all()
+
+        recent_signal_contexts = [
+            SignalContext(
+                competitor_name=s.source.competitor.name,
+                source_type=s.source.source_type,
+                source_url=s.source.url,
+                priority=s.priority,
+                is_baseline=s.is_baseline,
+                what_changed=s.what_changed,
+                why_it_matters=s.why_it_matters,
+                suggested_response=s.suggested_response,
+                old_content=None,  # snapshot bodies come via relevant_snapshots instead, to avoid duplicating content in the prompt
+                new_content=None,
+                created_at=str(s.created_at.date()),
+            )
+            for s in recent_signal_rows
+        ]
+        relevant_snapshot_contexts = [
+            SnapshotContext(
+                competitor_name=snap.source.competitor.name,
+                source_type=snap.source.source_type,
+                source_url=snap.source.url,
+                fetched_at=str(snap.fetched_at.date()),
+                content=snap.content,
+            )
+            for snap in relevant_snapshot_rows
+        ]
+
+        system_prompt = build_company_system_prompt(
+            company_name=target_company.name,
+            competitors=competitor_summaries,
+            recent_signals=recent_signal_contexts,
+            relevant_snapshots=relevant_snapshot_contexts,
+        )
+
+        session.add(
+            ChatMessageRow(scope="company", subject_id=target_company.id, role="user", content=body.question)
+        )
+        session.commit()
+
+        return _stream_chat_answer(
+            session, "company", str(target_company.id), system_prompt, history, body.question
+        )
+    except Exception:
+        session.close()
+        raise
 
 
 def _is_report_due(session, target_company: TargetCompany) -> bool:
@@ -145,18 +377,57 @@ def run_pipeline_for_target(
 
         session.commit()
 
-        report = assemble_report(session, target_company, week_start, week_end, new_signals)
-        cards = build_signal_cards(session, new_signals)
+        # Re-query for this company's not-yet-reported signals rather than using new_signals
+        # directly: a signal only counts as "spent" once it's actually included in a
+        # persisted report's signal_ids, so if a previous run's report generation failed
+        # after signals were already committed above (see docs/decisions.md's 2026-09-15 QA
+        # entry — that used to lose the whole report silently), this run picks up exactly
+        # what was lost alongside anything new, with no duplicate-signal risk.
+        reported_ids = {
+            sid
+            for ids in session.execute(
+                select(Report.signal_ids).where(Report.target_company_id == target_company_id)
+            ).scalars()
+            if ids
+            for sid in ids
+        }
+        report_signals = session.execute(
+            select(Signal).join(Signal.source).join(Source.competitor).where(
+                Source.competitor.has(target_company_id=target_company_id),
+                Signal.id.not_in(reported_ids),
+            )
+        ).scalars().all()
 
-        chart_paths = render_report_charts(report.chart_data, OUTPUT_DIR / str(report.id))
-        pdf_path = render_pdf(
-            report, target_company, cards, chart_paths, OUTPUT_DIR / str(report.id) / "report.pdf"
+        try:
+            report = assemble_report(session, target_company, week_start, week_end, report_signals)
+            cards = build_signal_cards(session, report_signals)
+
+            chart_paths = render_report_charts(report.chart_data, OUTPUT_DIR / str(report.id))
+            pdf_path = render_pdf(
+                report, target_company, cards, chart_paths, OUTPUT_DIR / str(report.id) / "report.pdf"
+            )
+            report.pdf_url = upload_report_pdf(pdf_path, report.id)
+            session.commit()
+            session.refresh(report)
+        except Exception:
+            # The signals themselves are already committed and safe (above) — only report
+            # generation (LLM summary, chart render, PDF render/upload) failed here. Roll
+            # back just the half-built Report row instead of leaving it partially set, and
+            # raise loudly instead of the previous silent failure. The frontend's own call to
+            # trigger a run is a deliberate fire-and-forget (see frontend/app/company/new/page.tsx),
+            # so this won't reach the user directly yet — but every pending signal is now
+            # recoverable by the query above on the very next run, instead of lost for good.
+            session.rollback()
+            logger.exception(
+                "Report generation failed for target %s (%d signals pending, recoverable on next run)",
+                target_company_id, len(report_signals),
+            )
+            raise
+
+        logger.info(
+            "Report %s generated with %d signals (%d new this run) -> %s",
+            report.id, len(report_signals), len(new_signals), pdf_path,
         )
-        report.pdf_url = upload_report_pdf(pdf_path, report.id)
-        session.commit()
-        session.refresh(report)
-
-        logger.info("Report %s generated with %d signals -> %s", report.id, len(new_signals), pdf_path)
         return report
     finally:
         session.close()

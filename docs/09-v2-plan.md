@@ -45,10 +45,21 @@ Phases 1 and 2 are code-complete and verified live (auth incl. Google + GitHub O
 
 Beyond the original 4-phase plan, three features were added straight from `docs/10-competitive-feature-research.md`'s research pass rather than waiting for a formal Phase 3/4 slot, since they fit the existing architecture cheaply:
 - **Multi-competitor trend chart** (`frontend/components/TrendChart.tsx`) on the company page.
-- **Community signal tracking** (`backend/collectors/community_collector.py`) — a new `community` source type scanning HN + Reddit for buying-intent chatter, not just name mentions.
+- **Community signal tracking** (`backend/collectors/community_collector.py`) — a new `community` source type scanning HN for buying-intent chatter, not just name mentions (originally HN + Reddit; Reddit dropped 2026-09-11, see `docs/decisions.md`).
 - **A customizable dashboard** (`dashboard_widgets` table + `/dashboard/custom`) — not from the research doc, user-requested: mix feed/chart widgets from any tracked company on one page.
 
 One more fix landed alongside the dashboard work: `reports`/`signals` had kept their v1 single-tenant "public read" policy, which was a real cross-tenant data leak now that real users exist. Replaced with real report-level sharing (private by default, owner-controlled public toggle, or per-email invites) — see `docs/decisions.md`'s 2026-09-10 entry for the full RLS design.
+
+### 2026-09-14 additions
+A full visual redesign (Tailwind + the `DESIGN.md` token spec — Google-blue primary, Plus Jakarta Sans/Inter/JetBrains Mono, hairline-border cards, light/dark toggle) landed across every existing screen, plus a run of feature requests handled in the same session — full detail in `docs/decisions.md`'s 2026-09-14 entries:
+- **`review` and `general` source types** — a competitor's G2/Capterra/Trustpilot profile, and a catch-all "track everything" page (usually the homepage) for founders who don't want to scope to one category.
+- **Raw diff view** on signal cards — old-vs-new snapshot content, word-diffed, next to the LLM's summary (web and PDF).
+- **Notifications page** (`/notifications`, new route) — a live feed of every signal across a user's companies, with a bell-icon unread count in the nav.
+- **Optional "track my own company too"** — a competitor row can represent the target company itself (`competitors.is_self`), badged "Your company" everywhere rather than reading as a competitive threat.
+- **Multi-competitor comparison widgets** — `/dashboard/custom` widgets can now compare a hand-picked set of competitors (not just "one" or "all") across 11 chart types (was 3: feed/bar/line), with a real custom title.
+- **Delete-company button** — required widening every FK in the `target_companies -> competitors -> sources -> snapshots/signals/reports` chain to cascade, since none of them did before.
+
+**Not yet applied to the live Supabase DB**: every schema change from 2026-09-14 (the `review`/`general` source types, `snapshots`' shared-read policy, `competitors.is_self`, `dashboard_widgets.competitor_ids`/`group_by`/widened `display`, and the cascade-delete FK changes) is written into `infra/sql/schema.sql` but not yet run against `DATABASE_URL` — see `docs/decisions.md` for why (auto-mode has repeatedly blocked the direct-DB script as a "production deploy" action).
 
 ---
 
@@ -98,17 +109,18 @@ All of the following are built and live, except `/billing` (Phase 4, deferred). 
 | 6 | `/dashboard/custom` ("My Dashboard") | Customizable widget dashboard — feed/bar/line widgets from any tracked company, drag-to-reorder | Built (not in the original plan; added 2026-09-10) |
 | 7 | `/company/new` | Single-page wizard: name/website, discovery, review/edit, confirm | Built (collapsed the planned two-step wizard into one route+form) |
 | 8 | `/company/[id]` | Company detail: report history, competitor trend chart, manage sources, `needs_review`/`broken` warnings | Built |
-| 9 | `/report/[id]` | Individual report view — headline, summary, signal cards, owner-only Share panel (public/private, per-email invites) | Built, extended from the v1 original |
+| 9 | `/report/[id]` | Individual report view — headline, summary, signal cards (each with a raw old-vs-new diff), owner-only Share panel (public/private, per-email invites) | Built, extended from the v1 original |
 | 10 | `/settings` | Account settings | Built |
+| 11 | `/notifications` | Live feed of every signal across a user's companies, newest first, linking to its report | Built (not in the original plan; added 2026-09-14) |
 
-**Core product (Phases 1–3, plus the two additions above): 10 distinct routes.**
+**Core product (Phases 1–3, plus the additions above): 11 distinct routes.**
 
 **Phase 4 (optional, deferred)** would add one more:
 
 | # | Route | Purpose | Status |
 |---|-------|---------|--------|
-| 11 | `/billing` | Plan/subscription management | Not built, deferred to Phase 4 |
+| 12 | `/billing` | Plan/subscription management | Not built, deferred to Phase 4 |
 
 ---
 
-*Plan approved 2026-09-04. Full phase detail with file-level notes lives in the plan file this was generated from; this document is the durable, repo-committed version of it. Status section and page map updated 2026-09-10 to match what's actually built — see `docs/decisions.md` for the verification trail.*
+*Plan approved 2026-09-04. Full phase detail with file-level notes lives in the plan file this was generated from; this document is the durable, repo-committed version of it. Status section and page map updated 2026-09-14 to match what's actually built — see `docs/decisions.md` for the verification trail.*

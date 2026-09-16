@@ -41,6 +41,11 @@ class Competitor(Base):
     target_company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("target_companies.id"))
     name: Mapped[str] = mapped_column(String, nullable=False)
     website: Mapped[str | None] = mapped_column(String)
+    # Optional "track my own company too" (see docs/decisions.md): this row is the target
+    # company itself, not an actual competitor. Same pipeline either way — purely a UI flag
+    # (a "Your company" badge, distinguishable in the widget comparison picker) so it never
+    # reads as a competitive threat in generated report language.
+    is_self: Mapped[bool] = mapped_column(default=False)
 
     target_company: Mapped["TargetCompany"] = relationship(back_populates="competitors")
     sources: Mapped[list["Source"]] = relationship(back_populates="competitor")
@@ -100,6 +105,11 @@ class Signal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     source: Mapped["Source"] = relationship(back_populates="signals")
+    # Two separate FKs to the same table, so each needs its own foreign_keys= to disambiguate.
+    # Used by backend/report/assembler.py to build the raw old-vs-new diff view alongside the
+    # LLM summary (docs/10-competitive-feature-research.md quick win #2).
+    old_snapshot: Mapped["Snapshot | None"] = relationship(foreign_keys=[old_snapshot_id])
+    new_snapshot: Mapped["Snapshot | None"] = relationship(foreign_keys=[new_snapshot_id])
 
 
 class Report(Base):
@@ -121,3 +131,16 @@ class Report(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     target_company: Mapped["TargetCompany"] = relationship(back_populates="reports")
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String)  # report | company
+    # A report_id or target_company_id depending on scope — not a real FK, since it points to
+    # two different tables (see infra/sql/schema.sql for why).
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    role: Mapped[str] = mapped_column(String)  # user | assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

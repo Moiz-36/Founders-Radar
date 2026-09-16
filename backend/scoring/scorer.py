@@ -11,6 +11,8 @@ PRIORITY_RUBRIC: dict[str, str] = {
     "feature": "medium",
     "job_posting": "low",
     "news": "low",
+    "review": "medium",
+    "general": "medium",
 }
 
 DEFAULT_PRIORITY = "low"

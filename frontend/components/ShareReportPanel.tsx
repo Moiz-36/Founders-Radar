@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Badge } from "@/components/ui/Badge";
 import { createClient } from "@/lib/supabase/client";
 import { ReportShare, ReportVisibility } from "@/lib/types";
 
@@ -64,23 +65,29 @@ export function ShareReportPanel({ reportId, initialVisibility, initialShares }:
   }
 
   return (
-    <div style={{ marginBottom: "1.5rem" }}>
-      <button type="button" className="btn btn-secondary" onClick={() => setOpen((v) => !v)}>
-        {open ? "Close sharing" : "Share"} —{" "}
-        <span className={`status-badge status-${visibility === "public" ? "active" : "needs_review"}`}>
-          {visibility}
-        </span>
+    <div className="mb-6">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-2 rounded-lg border border-[#dadce0] bg-canvas px-4 py-2 text-sm font-medium text-ink transition hover:bg-hover dark:border-border-dark dark:bg-surface-dark dark:text-ink-dark dark:hover:bg-hover-dark"
+      >
+        {open ? "Close sharing" : "Share"}
+        <Badge tone={visibility === "public" ? "positive" : "warning"}>{visibility}</Badge>
       </button>
 
       {open && (
-        <div className="competitor-group" style={{ marginTop: "0.8rem" }}>
-          {error && <div className="form-error">{error}</div>}
+        <div className="mt-3 rounded-lg border border-border bg-canvas p-5 shadow-[0_1px_2px_0_rgba(60,64,67,0.08)] dark:border-border-dark dark:bg-surface-dark">
+          {error && (
+            <div className="mb-3 rounded-lg bg-critical-bg px-3 py-2 text-sm text-critical dark:bg-critical-bg-dark dark:text-critical-dark">
+              {error}
+            </div>
+          )}
 
-          <div className="field-label" style={{ marginTop: 0 }}>
+          <div className="mb-2 text-[11px] font-semibold tracking-wide text-ink-muted uppercase dark:text-ink-muted-dark">
             Who can view this report
           </div>
-          <div style={{ display: "flex", gap: "1.2rem", marginBottom: "1rem", fontSize: "0.9rem" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" }}>
+          <div className="mb-2 flex gap-3 text-sm">
+            <label className="flex cursor-pointer items-center gap-2 text-ink dark:text-ink-dark">
               <input
                 type="radio"
                 name="visibility"
@@ -90,8 +97,8 @@ export function ShareReportPanel({ reportId, initialVisibility, initialShares }:
               Private — only you, and anyone invited below
             </label>
           </div>
-          <div style={{ display: "flex", gap: "1.2rem", marginBottom: "1rem", fontSize: "0.9rem" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" }}>
+          <div className="mb-4 flex gap-3 text-sm">
+            <label className="flex cursor-pointer items-center gap-2 text-ink dark:text-ink-dark">
               <input
                 type="radio"
                 name="visibility"
@@ -102,30 +109,39 @@ export function ShareReportPanel({ reportId, initialVisibility, initialShares }:
             </label>
           </div>
 
-          <div className="field-label">Invite people by email</div>
-          <form onSubmit={handleInvite} style={{ display: "flex", gap: "0.6rem", marginBottom: "0.8rem" }}>
+          <div className="mb-1 text-[11px] font-semibold tracking-wide text-ink-muted uppercase dark:text-ink-muted-dark">
+            Invite people by email
+          </div>
+          <form onSubmit={handleInvite} className="mb-2 flex gap-2">
             <input
-              className="input"
-              style={{ flex: 1, marginBottom: 0 }}
               type="email"
               placeholder="name@company.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              className="flex-1 rounded-lg border border-[#dadce0] bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 dark:border-border-dark dark:bg-canvas-dark dark:text-ink-dark"
             />
-            <button className="btn btn-secondary" type="submit" disabled={saving} style={{ flexShrink: 0 }}>
+            <button
+              type="submit"
+              disabled={saving}
+              className="shrink-0 rounded-lg border border-[#dadce0] bg-canvas px-3 py-2 text-sm font-medium text-ink transition hover:bg-hover disabled:opacity-60 dark:border-border-dark dark:bg-surface-dark dark:text-ink-dark dark:hover:bg-hover-dark"
+            >
               {saving ? "Inviting..." : "Invite"}
             </button>
           </form>
-          <p style={{ fontSize: "0.78rem", color: "#5b6472", marginTop: 0, marginBottom: "0.8rem" }}>
-            They'll need to sign up or log in with this exact email to view it.
+          <p className="mb-3 text-xs text-ink-muted dark:text-ink-muted-dark">
+            They&apos;ll need to sign up or log in with this exact email to view it.
           </p>
 
           {shares.length > 0 && (
-            <div>
+            <div className="divide-y divide-border dark:divide-border-dark">
               {shares.map((s) => (
-                <div key={s.id} className="source-row">
-                  <span>{s.email}</span>
-                  <button type="button" className="btn-text" onClick={() => handleRemove(s.id)}>
+                <div key={s.id} className="flex items-center justify-between py-2 text-sm">
+                  <span className="text-ink dark:text-ink-dark">{s.email}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(s.id)}
+                    className="text-xs font-medium text-ink-muted hover:text-critical dark:text-ink-muted-dark dark:hover:text-critical-dark"
+                  >
                     remove
                   </button>
                 </div>

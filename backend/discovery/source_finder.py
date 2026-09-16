@@ -27,13 +27,16 @@ SEARCH_QUERIES = {
     "pricing": "{name} pricing",
     "feature": "{name} changelog OR blog OR \"what's new\" OR release notes",
     "job_posting": "{name} careers OR jobs",
+    "review": "{name} reviews G2 OR Capterra OR Trustpilot",
 }
 
 # pricing/feature pages should live on the competitor's own domain — an open web search for
 # e.g. "Coda pricing" gets dominated by third-party review/aggregator sites (vendr.com,
 # roundup blogs) that rank above coda.io/pricing itself (confirmed by hand testing this).
 # job_posting is deliberately NOT restricted: it legitimately often lives on an external ATS
-# domain (Greenhouse, Lever, Ashby) rather than the company's own site.
+# domain (Greenhouse, Lever, Ashby) rather than the company's own site. review is deliberately
+# NOT restricted either — a review source is, by definition, a third-party site (G2/Capterra/
+# Trustpilot), never the competitor's own domain.
 RESTRICT_TO_OWN_DOMAIN = {"pricing", "feature"}
 
 
@@ -46,13 +49,16 @@ competitor's website. For each source type below, you're given web search result
 the single best URL that actually matches that type, or null if none of the results are a \
 good match (e.g. a job board search result that's actually blocked or unrelated). A job \
 posting source may legitimately be on an external site (Greenhouse, Lever, Ashby, etc.) \
-instead of the company's own domain — that's normal and still a good match.
+instead of the company's own domain — that's normal and still a good match. A review source \
+should be the competitor's actual profile page on a review site (G2, Capterra, or \
+Trustpilot), not a blog post or roundup article that merely mentions reviews.
 
 Respond with ONLY a JSON object with this exact shape:
 {
   "pricing": "https://..." | null,
   "feature": "https://..." | null,
-  "job_posting": "https://..." | null
+  "job_posting": "https://..." | null,
+  "review": "https://..." | null
 }"""
 
 
@@ -95,4 +101,10 @@ def find_sources(competitor_name: str, website: str | None = None) -> list[Sourc
     # News and community are deterministic, not search+LLM-derived — see module docstring.
     candidates.append(SourceCandidate(source_type="news", url=competitor_name))
     candidates.append(SourceCandidate(source_type="community", url=competitor_name))
+    # "general" (the catch-all "everything about this business" source, user request
+    # 2026-09-14) is also deterministic: the competitor's own homepage is the one URL that's
+    # already the broadest possible page, so there's nothing for a search+LLM pick to add.
+    # Omitted (like job_posting sometimes is) when no website is known.
+    if website:
+        candidates.append(SourceCandidate(source_type="general", url=website))
     return candidates

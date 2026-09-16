@@ -61,8 +61,16 @@ CREATE TABLE reports (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Speeds up pgvector similarity search used by analysis/analyst.py's RAG retrieval.
-CREATE INDEX ON snapshots USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- No approximate index (ivfflat/HNSW) on `embedding` for now — an ivfflat index built with a
+-- `lists` count sized for a large table (the original `lists = 100` here) badly under-recalls
+-- on a small one: with only a handful of rows spread across 100 near-empty clusters, similarity
+-- search silently returned ZERO matches for every query (found 2026-09-15 debugging
+-- backend/chat/qa.py's company-scoped chat — the same bug was already silently starving
+-- analysis/analyst.py's retrieve_related_context() of its "related historical context" input).
+-- A plain sequential scan is exact and effectively free at current row counts (verified:
+-- `SET enable_indexscan = off` immediately fixed retrieval). Add an ivfflat/HNSW index back
+-- once `snapshots` has enough rows (thousands+) for an approximate index to actually pay off —
+-- size `lists` to roughly sqrt(row count) at that point, not a fixed guess.
 
 -- The frontend reads reports/signals with the public anon key (see docs/07-frontend.md) —
 -- Supabase enables RLS by default with zero policies, which silently returns no rows
@@ -346,3 +354,189 @@ ALTER TABLE sources ADD CONSTRAINT sources_source_type_check
 ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_source_type_check;
 ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_source_type_check
     CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news', 'community'));
+
+-- Review-site monitoring (docs/10-competitive-feature-research.md quick win #1): a new
+-- source_type for a competitor's G2/Capterra/Trustpilot profile page, via
+-- backend/collectors/review_collector.py.
+ALTER TABLE sources DROP CONSTRAINT IF EXISTS sources_source_type_check;
+ALTER TABLE sources ADD CONSTRAINT sources_source_type_check
+    CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news', 'community', 'review'));
+
+ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_source_type_check;
+ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_source_type_check
+    CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news', 'community', 'review'));
+
+-- Raw diff view (docs/10-competitive-feature-research.md quick win #2): the report page shows
+-- a signal's old/new snapshot content next to the LLM summary. snapshots previously had only
+-- the owner-scoped "owner read access" policy above, which would silently return nothing for
+-- anyone viewing a report via a public link or an email invite — the same class of RLS gap
+-- docs/decisions.md's 2026-09-10 entry already found and fixed once for reports/signals, so
+-- fixed the same way here rather than repeat it: mirror signals' "shared read access" policy,
+-- reached via the signal that references this snapshot as its old or new side.
+DROP POLICY IF EXISTS "shared read access" ON snapshots;
+CREATE POLICY "shared read access" ON snapshots
+    FOR SELECT USING (
+        EXISTS (
+            SELECT 1 FROM signals sig
+            JOIN reports r ON r.signal_ids @> ARRAY[sig.id]
+            WHERE (sig.old_snapshot_id = snapshots.id OR sig.new_snapshot_id = snapshots.id)
+            AND (r.visibility = 'public' OR is_report_shared_with_me(r.id))
+        )
+    );
+
+-- Widget Studio expansion (2026-09-14, user request): more than a feed/bar/line choice, and
+-- an explicit "what to break the chart down by" control instead of the old implicit rule
+-- (frontend/components/WidgetCard.tsx used to always group by source_type when a single
+-- competitor was picked, else by competitor — group_by makes that a real, visible choice).
+-- `display`'s CHECK constraint was created inline (unnamed) in the original CREATE TABLE, so
+-- Postgres auto-named it — drop by the generated name and recreate with the wider set.
+ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_display_check;
+ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_display_check
+    CHECK (display IN ('feed', 'bar', 'column', 'line', 'area', 'stacked_bar', 'donut', 'table', 'stat', 'heatmap', 'sparklines'));
+
+-- NULL = auto (mirrors the old implicit rule, for any widget row saved before this column
+-- existed): source_type when scoped to one competitor, competitor otherwise.
+ALTER TABLE dashboard_widgets ADD COLUMN IF NOT EXISTS group_by TEXT
+    CHECK (group_by IN ('competitor', 'source_type', 'priority', 'week'));
+
+-- "General / full overview" source type (user request, 2026-09-14): a catch-all source for
+-- founders who want the whole competitor tracked, not one specific page category — same
+-- generic whole-page-text collector as pricing/feature (backend/collectors/general_collector.py),
+-- left for the analyst LLM to describe whatever actually changed rather than being scoped to
+-- one topic.
+ALTER TABLE sources DROP CONSTRAINT IF EXISTS sources_source_type_check;
+ALTER TABLE sources ADD CONSTRAINT sources_source_type_check
+    CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news', 'community', 'review', 'general'));
+
+ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_source_type_check;
+ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_source_type_check
+    CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news', 'community', 'review', 'general'));
+
+-- Optional "track my own company too" (user request, 2026-09-14): a competitor row can
+-- represent the target company itself rather than an actual competitor — same pipeline,
+-- same sources/signals shape, purely a UI-facing flag (a "Your company" badge, and a
+-- distinguishable entry in the widget comparison picker) so it never gets confused for a
+-- real threat in report language. Opt-in per company; most rows stay false.
+ALTER TABLE competitors ADD COLUMN IF NOT EXISTS is_self BOOLEAN NOT NULL DEFAULT false;
+
+-- Multi-competitor comparison widgets (user request, 2026-09-14): a widget used to scope to
+-- exactly one competitor (or all). competitor_ids lets it scope to a hand-picked set (e.g.
+-- "my own company" + "Competitor 1" + "Competitor 2") for real side-by-side comparison charts.
+-- NULL/empty = all competitors, same as before. The old singular `competitor_id` column is
+-- left as-is for any pre-existing rows; new widgets are written via competitor_ids only.
+ALTER TABLE dashboard_widgets ADD COLUMN IF NOT EXISTS competitor_ids UUID[];
+
+-- Delete-company support (user request, 2026-09-14): none of these FKs cascaded (only
+-- dashboard_widgets did, from the original schema), so deleting a target_company row failed
+-- with a foreign-key violation the moment it had any competitors/reports. Widened the whole
+-- chain so one delete on target_companies actually removes everything under it. Constraint
+-- names below are Postgres's own default naming (`<table>_<column>_fkey`) for the inline
+-- REFERENCES clauses in the original CREATE TABLE statements — dropped and recreated the
+-- same way the CHECK-constraint migrations above do.
+ALTER TABLE competitors DROP CONSTRAINT IF EXISTS competitors_target_company_id_fkey;
+ALTER TABLE competitors ADD CONSTRAINT competitors_target_company_id_fkey
+    FOREIGN KEY (target_company_id) REFERENCES target_companies(id) ON DELETE CASCADE;
+
+ALTER TABLE sources DROP CONSTRAINT IF EXISTS sources_competitor_id_fkey;
+ALTER TABLE sources ADD CONSTRAINT sources_competitor_id_fkey
+    FOREIGN KEY (competitor_id) REFERENCES competitors(id) ON DELETE CASCADE;
+
+ALTER TABLE snapshots DROP CONSTRAINT IF EXISTS snapshots_source_id_fkey;
+ALTER TABLE snapshots ADD CONSTRAINT snapshots_source_id_fkey
+    FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE;
+
+ALTER TABLE signals DROP CONSTRAINT IF EXISTS signals_source_id_fkey;
+ALTER TABLE signals ADD CONSTRAINT signals_source_id_fkey
+    FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE;
+
+-- old/new snapshot references: SET NULL rather than CASCADE. A signal's own row is already
+-- removed via the source_id cascade above whenever its source goes away, so this only matters
+-- if a snapshot is ever deleted independently of its signal — not something the app does
+-- today, but SET NULL is the semantically correct default regardless: losing a snapshot
+-- shouldn't be able to cascade-delete a signal that merely references it.
+ALTER TABLE signals DROP CONSTRAINT IF EXISTS signals_old_snapshot_id_fkey;
+ALTER TABLE signals ADD CONSTRAINT signals_old_snapshot_id_fkey
+    FOREIGN KEY (old_snapshot_id) REFERENCES snapshots(id) ON DELETE SET NULL;
+
+ALTER TABLE signals DROP CONSTRAINT IF EXISTS signals_new_snapshot_id_fkey;
+ALTER TABLE signals ADD CONSTRAINT signals_new_snapshot_id_fkey
+    FOREIGN KEY (new_snapshot_id) REFERENCES snapshots(id) ON DELETE SET NULL;
+
+ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_target_company_id_fkey;
+ALTER TABLE reports ADD CONSTRAINT reports_target_company_id_fkey
+    FOREIGN KEY (target_company_id) REFERENCES target_companies(id) ON DELETE CASCADE;
+-- report_shares already cascades off reports.id (see its own CREATE TABLE above), so this
+-- chain reaches it transitively — no separate change needed there.
+
+-- Chat history persistence (Phase 3 of the chat feature, 2026-09-15): survives a page refresh
+-- and gives the rate limit below something durable to count. `subject_id` is a report_id or a
+-- target_company_id depending on `scope` — not a real FK, since it points to two different
+-- tables, same tradeoff docs/decisions.md already accepted for other polymorphic-ish lookups.
+-- Only the backend (its own DATABASE_URL connection, bypassing RLS — same as how it writes
+-- reports/signals) ever INSERTs here; the RLS policy below only needs to cover SELECT.
+CREATE TABLE chat_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scope TEXT NOT NULL CHECK (scope IN ('report', 'company')),
+    subject_id UUID NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX ON chat_messages (scope, subject_id, created_at);
+
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+
+-- Mirrors each scope's own visibility rule exactly: report scope reuses the owner/shared/public
+-- check from reports' and snapshots' own policies (see is_report_shared_with_me above); company
+-- scope reuses target_companies' owner-only rule (no sharing for companies).
+CREATE POLICY "owner or shared read access" ON chat_messages
+    FOR SELECT USING (
+        (scope = 'report' AND EXISTS (
+            SELECT 1 FROM reports r
+            JOIN target_companies tc ON tc.id = r.target_company_id
+            WHERE r.id = chat_messages.subject_id
+            AND (r.visibility = 'public' OR is_report_shared_with_me(r.id) OR tc.owner_id = auth.uid())
+        ))
+        OR
+        (scope = 'company' AND EXISTS (
+            SELECT 1 FROM target_companies tc
+            WHERE tc.id = chat_messages.subject_id AND tc.owner_id = auth.uid()
+        ))
+    );
+
+-- chat_messages.subject_id isn't a real FK (it points to reports OR target_companies
+-- depending on scope — can't be one column with one FK), so the ON DELETE CASCADE chain above
+-- never reaches it: deleting a company/report used to leave its chat history behind as orphan
+-- rows forever (found 2026-09-15, right after shipping chat persistence). Triggers close that
+-- gap the same way the FK cascades close it for every other table, regardless of whether the
+-- delete comes from the frontend's direct Supabase call (DeleteCompanyButton.tsx) or anywhere else.
+-- Bug found in QA (2026-09-15): these two functions were originally declared without SECURITY
+-- DEFINER, so they ran as SECURITY INVOKER — the privileges of whoever triggered the parent
+-- DELETE. Since chat_messages has RLS enabled with only a SELECT policy (no DELETE policy), the
+-- DELETE inside each trigger silently matched zero rows under RLS whenever the parent delete came
+-- through the normal owner-authenticated/anon-key path (i.e. every real delete from the app) —
+-- no error, just orphaned rows left behind forever. Same class of bypass-RLS-internally problem
+-- is_report_shared_with_me() above already had to solve; fixed the same way.
+CREATE OR REPLACE FUNCTION delete_chat_messages_for_company() RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM chat_messages WHERE scope = 'company' AND subject_id = OLD.id;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+DROP TRIGGER IF EXISTS trg_delete_chat_messages_for_company ON target_companies;
+CREATE TRIGGER trg_delete_chat_messages_for_company
+    AFTER DELETE ON target_companies
+    FOR EACH ROW EXECUTE FUNCTION delete_chat_messages_for_company();
+
+CREATE OR REPLACE FUNCTION delete_chat_messages_for_report() RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM chat_messages WHERE scope = 'report' AND subject_id = OLD.id;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+DROP TRIGGER IF EXISTS trg_delete_chat_messages_for_report ON reports;
+CREATE TRIGGER trg_delete_chat_messages_for_report
+    AFTER DELETE ON reports
+    FOR EACH ROW EXECUTE FUNCTION delete_chat_messages_for_report();

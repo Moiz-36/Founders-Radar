@@ -9,6 +9,7 @@ from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from backend.db.models import Competitor, Report, Signal, Source, TargetCompany
+from backend.report.diff_util import render_diff_html
 
 # Groq's API is OpenAI-compatible — see backend/analysis/analyst.py.
 MODEL = "openai/gpt-oss-120b"
@@ -38,6 +39,8 @@ class SignalCard:
     priority: str
     source_url: str
     is_baseline: bool
+    diff_html: str | None
+    diff_truncated: bool
 
 
 def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCard]:
@@ -45,6 +48,15 @@ def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCa
     for signal in signals:
         source: Source = signal.source
         competitor: Competitor = source.competitor
+
+        # Baseline signals have no old_snapshot (nothing to diff against yet); ordinary
+        # signals always have both by construction (see backend/main.py), but guard anyway
+        # since either FK is nullable at the schema level.
+        diff_html: str | None = None
+        diff_truncated = False
+        if not signal.is_baseline and signal.old_snapshot is not None and signal.new_snapshot is not None:
+            diff_html, diff_truncated = render_diff_html(signal.old_snapshot.content, signal.new_snapshot.content)
+
         cards.append(
             SignalCard(
                 source_type=source.source_type,
@@ -55,6 +67,8 @@ def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCa
                 priority=signal.priority or "low",
                 source_url=source.url,
                 is_baseline=signal.is_baseline,
+                diff_html=diff_html,
+                diff_truncated=diff_truncated,
             )
         )
     # Highest priority first for the founder's scan order.

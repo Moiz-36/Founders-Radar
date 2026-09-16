@@ -13,12 +13,6 @@ const LABEL_WIDTH = 110;
 const CHART_WIDTH = 420;
 const BAR_AREA_WIDTH = CHART_WIDTH - LABEL_WIDTH - 40; // leaves room for the value label
 
-// Matches the report page's existing accent (globals.css --accent) — one hue, since each
-// chart here is a single series (magnitude per category), not multiple series needing
-// CVD-distinct hues. See dataviz skill: "Compare magnitude -> bar; color job: sequential."
-const BAR_COLOR = "#2c3e50";
-const BAR_COLOR_HOVER = "#3d5a76";
-
 export function BarChart({ title, data }: BarChartProps) {
   const [hovered, setHovered] = useState<number | null>(null);
 
@@ -29,8 +23,13 @@ export function BarChart({ title, data }: BarChartProps) {
   const height = data.length * rowHeight;
 
   return (
-    <div style={{ marginBottom: "2rem" }}>
-      <div className="field-label" style={{ marginTop: 0, marginBottom: "0.6rem" }}>
+    // Single-series magnitude comparison (one bar per named category/competitor) — one
+    // sequential hue (DESIGN.md's brand blue), not a categorical set, per dataviz skill's form
+    // heuristic: color isn't needed to distinguish bars already distinguished by their axis
+    // label. Light/dark values as scoped CSS custom properties (dataviz skill's recommended
+    // pattern) so the SVG's presentation attributes can reference them directly.
+    <div className="mb-8 [--bar:#0B57D0] [--bar-hover:#0842A0] [--chart-ink:#202124] [--chart-muted:#5F6368] dark:[--bar:#8AB4F8] dark:[--bar-hover:#AECBFA] dark:[--chart-ink:#E8EAED] dark:[--chart-muted:#9AA0A6]">
+      <div className="mb-2 text-[11px] font-semibold tracking-wide text-ink-muted uppercase dark:text-ink-muted-dark">
         {title}
       </div>
       <svg
@@ -63,8 +62,7 @@ export function BarChart({ title, data }: BarChartProps) {
                 textAnchor="end"
                 dominantBaseline="middle"
                 fontSize="12"
-                fontFamily="Helvetica, Arial, sans-serif"
-                fill="#5b6472"
+                fill="var(--chart-muted)"
               >
                 {d.label}
               </text>
@@ -74,16 +72,15 @@ export function BarChart({ title, data }: BarChartProps) {
                 width={barWidth}
                 height={BAR_HEIGHT}
                 rx={4}
-                fill={isHovered ? BAR_COLOR_HOVER : BAR_COLOR}
+                fill={isHovered ? "var(--bar-hover)" : "var(--bar)"}
               />
               <text
                 x={LABEL_WIDTH + barWidth + 8}
                 y={y + BAR_HEIGHT / 2}
                 dominantBaseline="middle"
                 fontSize="12"
-                fontFamily="Helvetica, Arial, sans-serif"
                 fontWeight="bold"
-                fill="#1a1f27"
+                fill="var(--chart-ink)"
               >
                 {d.value}
               </text>

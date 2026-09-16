@@ -19,6 +19,10 @@
   .priority-low { background: #dde5ee; color: #3a4a5c; }
   .baseline-badge { font-size: 8pt; font-weight: bold; padding: 0.2em 0.7em; border-radius: 3px; text-transform: uppercase; background: #e3ddf5; color: #4b2e83; margin-right: 0.4em; }
   .card .field-label { font-family: "Helvetica", sans-serif; font-size: 8.5pt; color: #5b6472; text-transform: uppercase; margin-top: 0.6em; }
+  .diff { font-family: "Courier New", monospace; font-size: 8pt; line-height: 1.5; background: #f9fafb; border-radius: 4px; padding: 0.6em 0.8em; margin-top: 0.3em; white-space: pre-wrap; word-break: break-word; }
+  .diff ins { background: #d4f5dc; color: #1f6b34; text-decoration: none; }
+  .diff del { background: #f8d7da; color: #8a1f1f; }
+  .diff-note { font-size: 7.5pt; color: #5b6472; margin-top: 0.3em; }
   .appendix { font-size: 9pt; color: #5b6472; }
 </style>
 </head>
@@ -53,6 +57,11 @@
     {% if card.suggested_response %}
     <div class="field-label">Suggested response</div>
     <div>{{ card.suggested_response }}</div>
+    {% endif %}
+    {% if card.diff_html %}
+    <div class="field-label">Raw diff</div>
+    <div class="diff">{{ card.diff_html | safe }}</div>
+    {% if card.diff_truncated %}<div class="diff-note">(truncated to the first 4,000 characters per side)</div>{% endif %}
     {% endif %}
   </div>
   {% endfor %}

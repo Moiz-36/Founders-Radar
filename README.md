@@ -1,6 +1,6 @@
 # Founder's Radar
 
-A market-intelligence platform that tracks a company's competitors — pricing, features, hiring, press, and community buying-intent chatter — and turns detected changes into a designed report, on a schedule, per company.
+A market-intelligence platform that tracks a company's competitors — pricing, features, hiring, press, review-site ratings, and community buying-intent chatter — and turns detected changes into a designed report, on a schedule, per company.
 
 ## Why this exists
 
@@ -14,13 +14,13 @@ After that pilot shipped end-to-end against real data, it was rebuilt into a rea
 Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG + LLM) → Scorer → Report Assembler → PDF/Web Renderer
 ```
 
-1. **Discovery** (per tracked company): an LLM + Tavily web search propose competitors and their pricing/feature/jobs/news/community source URLs; the user reviews and edits before anything is saved — never fully autonomous.
-2. **Collectors** fetch each competitor's pricing page, feature/changelog page, job board, recent press mentions, and community buying-intent chatter (HN + Reddit — "alternative to X", "switching from X"), hashing content to detect any change at all.
+1. **Discovery** (per tracked company): an LLM + Tavily web search propose competitors and their pricing/feature/jobs/review/news/community source URLs; the user reviews and edits before anything is saved — never fully autonomous.
+2. **Collectors** fetch each competitor's pricing page, feature/changelog page, job board, review-site profile (G2/Capterra/Trustpilot), recent press mentions, and community buying-intent chatter (HN — "alternative to X", "switching from X"), hashing content to detect any change at all.
 3. **Change detector** embeds old vs. new content and flags a *real* change only when cosine similarity drops below a tuned threshold — plain text diffing is too noisy (a reworded sentence isn't a signal). Tuned and precision-tested against a hand-labeled eval set in [`/eval`](./eval).
 4. **Analyst** retrieves related historical context via pgvector similarity search and prompts an LLM to explain what changed and why it matters to a competing founder.
 5. **Validator** checks the analyst's claim against the actual diffed content before it's trusted, to catch hallucination — flagged failures are logged, not silently dropped.
 6. **Scorer** assigns High/Medium/Low priority via a small, explicit rubric (`backend/scoring/scorer.py`) rather than logic buried deep in the pipeline.
-7. **Report assembler + renderer** turns the period's scored signals into a designed PDF and web report — headline, executive summary, signal cards, charts, source appendix. The report's owner controls who can see it (private, invited by email, or public) once it's live.
+7. **Report assembler + renderer** turns the period's scored signals into a designed PDF and web report — headline, executive summary, signal cards (each with a raw old-vs-new diff alongside the LLM summary), charts, source appendix. The report's owner controls who can see it (private, invited by email, or public) once it's live.
 
 Runs per company on that company's own configurable interval (Cloud Scheduler → Cloud Run), not one shared weekly cron.
 
@@ -46,7 +46,7 @@ infra/          # Cloud Run + Cloud Scheduler config, Dockerfile, SQL schema
 py -3.12 -m venv .venv
 ./.venv/Scripts/pip install -r backend/requirements.txt
 ./.venv/Scripts/python -m playwright install chromium
-cp .env.example .env   # fill in DATABASE_URL, GROQ_API_KEY, TAVILY_API_KEY, SUPABASE_*; REDDIT_CLIENT_ID/SECRET optional
+cp .env.example .env   # fill in DATABASE_URL, GROQ_API_KEY, TAVILY_API_KEY, SUPABASE_*
 ./.venv/Scripts/uvicorn backend.main:app --reload
 
 # Database — schema.sql is cumulative/append-only, safe to run once against a fresh
@@ -63,7 +63,7 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
-No OpenAI account needed — embeddings run locally via `sentence-transformers` at zero cost. `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET` (a free Reddit "script" app, no card) are optional — the community-signal collector degrades to Hacker-News-only without them.
+No OpenAI account needed — embeddings run locally via `sentence-transformers` at zero cost.
 
 ## Status
 
@@ -71,7 +71,6 @@ Live in production on GCP (Cloud Run + Cloud Scheduler, per-company schedule). B
 
 Open items:
 - Populate `/eval` with more real labeled examples — the change-detection similarity threshold is still calibrated on a small hand-labeled set (see `docs/decisions.md`).
-- Reddit OAuth credentials haven't been provisioned yet, so the community-signal collector currently runs Hacker-News-only in practice (Reddit's side is implemented and tested to fail gracefully, just not exercised with real credentials).
 - Email notifications on new reports (Phase 3 of the v2 plan) — provider not yet chosen.
 - No git remote is configured on the dev machine yet — the full history exists only as local commits until this is pushed somewhere.
 
