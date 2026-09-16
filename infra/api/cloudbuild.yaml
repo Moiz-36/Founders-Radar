@@ -1,0 +1,22 @@
+# Cloud Build config for building the interactive API image from a non-root Dockerfile —
+# same reasoning and pattern as infra/cloud_function/cloudbuild.yaml (the `--tag` shorthand
+# can't point at a Dockerfile outside the source root).
+#
+# Usage (from the repo root, so `backend/` is in the build context):
+#   gcloud builds submit --config=infra/api/cloudbuild.yaml \
+#     --substitutions=_IMAGE=us-central1-docker.pkg.dev/<project-id>/founders-radar/founders-radar-api .
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_IMAGE}"
+      - "-f"
+      - "infra/api/Dockerfile"
+      - "."
+images:
+  - "${_IMAGE}"
+substitutions:
+  _IMAGE: "us-central1-docker.pkg.dev/PROJECT_ID/founders-radar/founders-radar-api"
+options:
+  logging: CLOUD_LOGGING_ONLY
