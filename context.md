@@ -1,269 +1,120 @@
 # CLAUDE.md — Founder's Radar Project Context
 
-> **Superseded 2026-09-04 by the v2 pivot** — this is the original v1 planning brief, kept as-is for the historical record (the "Non-Goals" section below, in particular, no longer holds — auth/multi-tenancy/payments went from explicitly out-of-scope to built). For the current plan and status, see `docs/09-v2-plan.md` (plan/page map) and `docs/decisions.md` (dated build log, most recent entry 2026-09-10). The pipeline architecture described below (collectors → change detector → analyst → scorer → assembler) is still accurate — v2 builds a multi-tenant product on top of it, not a replacement.
-
-This file is the full context for building **Founder's Radar**, a market-intelligence pipeline that watches a startup's competitors and produces a weekly report. Read this fully before writing code. Ask clarifying questions if anything below is ambiguous rather than guessing.
+This is the current, living context for **Founder's Radar** — read this before making changes, and treat `docs/decisions.md` (dated build log) and `docs/09-v2-plan.md` (plan/page map) as the deeper record behind any non-obvious choice mentioned here. This file used to be the frozen v1 planning brief; it's been rewritten to describe what's actually built and live today, not what was originally planned.
 
 ---
 
-## 1. Project Overview
+## 1. What this is, right now
 
-**What it is**: A pipeline that tracks a defined set of competitors for one target company, detects meaningful changes (pricing, features, hiring, press), synthesizes them into a written analysis, and outputs a designed report (PDF and/or webpage) with charts.
+Founder's Radar is a **live, multi-tenant** market-intelligence product: any signed-in user tracks their own set of companies, and for each one, their own set of competitors and sources (pricing, feature, job postings, reviews, news, community chatter, or a general catch-all page). A scheduled pipeline scrapes those sources, detects real changes, has an LLM explain what changed and why it matters, scores priority, and assembles the result into a report (web + PDF) with a chat assistant you can ask follow-up questions.
 
-**Why it exists**: This is a portfolio/outreach project — the finished report will be sent directly to a startup founder (pilot target: **ComplyDo**, a compliance-automation startup) as a personalized, unsolicited demonstration of the builder's skills. It is not being built as a SaaS product to sell (similar tools already exist commercially — Competely, Cassidy AI, Signum.AI — this project deliberately does not try to compete with them; it's a small, personalized, single-company version built to demonstrate technical + product judgment).
+It's a solo-built portfolio project, not a company — no funding, no team. It started as a single-company demo pipeline (see `docs/decisions.md`'s earliest entries for that history) and was rebuilt into the current product; see `docs/09-v2-plan.md` for that pivot's plan.
 
-**Public repo**: This project will be published on GitHub as a portfolio piece, so code quality, README clarity, and commit hygiene matter — write it as if a technical founder will read the source, not just the output.
-
----
-
-## 2. Goals & Non-Goals
-
-**Goals**
-- A working end-to-end pipeline: scrape → detect change → analyze → score → assemble report
-- One real, populated report for ComplyDo's actual market (2-3 real competitors)
-- A clean, designed final report (not a raw data dump) — this is the artifact a founder will actually see
-- Clean, well-documented, portfolio-quality code and README
-
-**Non-goals (do not build these unless explicitly asked later)**
-- No user accounts, auth, or multi-tenant support — this is single-company, single-run for now
-- No AI-generated video/narration — dropped from scope
-- No mobile app
-- No payment/subscription logic
-- No attempt to track more than ~3 competitors or more than ~4 source types for v1
+**Public repo**: published on GitHub, so code quality, README clarity, and commit hygiene matter — write it as if a technical reader will read the source, not just use the app.
 
 ---
 
-## 3. Tech Stack
+## 2. Goals & non-goals
 
-| Layer | Choice | Notes |
-|---|---|---|
-| Backend / pipeline | **FastAPI** (Python) | Reused from a prior project (WanderSafe) — familiar stack |
-| Database | **PostgreSQL + pgvector**, hosted on **Supabase** | Stores raw signals, embeddings, report history |
-| ORM | **SQLAlchemy** | Consistent with prior project conventions |
-| Scraping | `requests` + `BeautifulSoup` for static pages; `Playwright` for JS-heavy pages | Rate-limited, polite scraping — respect robots.txt |
-| Embeddings | OpenAI or equivalent embeddings API | Used for both RAG retrieval and semantic change detection |
-| LLM synthesis | Claude or GPT API | Used for the analyst step (turning raw signals into "what changed / why it matters") |
-| Charts | `matplotlib` (server-side, rendered to PNG/SVG) or a JS chart lib rendered at build time | Embedded directly into the report |
-| PDF generation | HTML/CSS template → PDF via **WeasyPrint** (or similar) | Design the report visually with normal web styling first |
-| Report frontend (if webpage delivery is used) | **Next.js**, deployed on **Vercel** | Reads finished report data from Supabase and renders it — no scraping or heavy compute happens here |
-| Scheduling / background jobs | **Google Cloud Functions + Cloud Scheduler** | Reused from a prior project (World Cup prediction) — do NOT try to run scraping or scheduled jobs on Vercel (function timeout limits make this unreliable) |
-| Language | Python for backend/pipeline, TypeScript for frontend | |
+**In scope and built**: multi-tenant auth (email/password + Google/GitHub OAuth via Supabase Auth), per-owner Row Level Security, AI-assisted discovery (LLM + web search proposes competitors/sources, human reviews before anything saves — never fully autonomous), the full collect → detect → analyze → score → assemble → render pipeline, a founder Q&A chat assistant (report-scoped and company-scoped), custom dashboard widgets, report sharing (private/public/email-invited), and a public marketing site.
 
-**Architecture principle**: Keep the heavy pipeline (scraping, detection, analysis, report generation) entirely separate from the frontend. Vercel only ever serves/reads the *finished* report from the database — it never runs scraping or generation logic itself.
+**Still out of scope** (don't build unless explicitly asked):
+- Payment/subscription logic — no billing exists
+- A native mobile app
+- Fully autonomous discovery with no human review step
 
 ---
 
-## 4. Pipeline Architecture
+## 3. Tech stack (as actually deployed, not as originally planned)
+
+| Layer | Choice |
+|---|---|
+| Backend / pipeline | **FastAPI** (Python) |
+| Database | **PostgreSQL + pgvector**, hosted on **Supabase**, with Row Level Security enforcing per-owner access |
+| ORM | **SQLAlchemy** |
+| Scraping | `requests` + `BeautifulSoup` for static pages; `Playwright` for JS-heavy pages (also used for PDF rendering) |
+| Embeddings | **local `sentence-transformers`** — free, no API key, used for both RAG retrieval and semantic change detection |
+| LLM synthesis | **Groq** (OpenAI-compatible API) — analyst, discovery, chat, executive summaries |
+| Web search (discovery) | **Tavily** |
+| Charts | `matplotlib`, rendered server-side to PNG for the PDF; hand-built SVG/Tailwind charts on the web report |
+| Frontend | **Next.js**, deployed on **Vercel** |
+| Auth | **Supabase Auth** (email/password, Google, GitHub) |
+| Backend hosting | **Google Cloud Run** — two separate services: one public (`founders-radar-api`, serves the frontend's real-time discover/chat/run-now calls) and one private (`founders-radar-pipeline`, only invokable by Cloud Scheduler, runs the daily scheduled multi-company pipeline pass) |
+| Scheduling | **Google Cloud Scheduler** → the private Cloud Run service, once daily; each company's own `report_interval_days` decides whether it's actually due that day |
+
+**Architecture principle**: the pipeline (scraping/detection/analysis/rendering) is fully decoupled from the frontend. The frontend reads/writes Supabase directly for everything except pipeline-triggering actions (discover/run/chat), which go through the public API service — protected by a shared-secret header (`PIPELINE_SHARED_SECRET`) since that service is public, not `--no-allow-unauthenticated` like the scheduled one.
+
+---
+
+## 4. Pipeline architecture
 
 ```
-[Collector Agents] → [Change Detector] → [Analyst] → [Scorer] → [Report Assembler] → [PDF/Web Renderer]
+Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG + LLM) → Scorer → Report Assembler → PDF/Web Renderer
 ```
 
-### 4.1 Collector Agents
-One collector per source type:
-- Competitor pricing page scraper
-- Competitor feature/changelog/blog scraper
-- Competitor job postings scraper (a job board or careers page)
-- One news/mentions source (Product Hunt / Hacker News / general news search API)
+1. **Discovery** (`backend/discovery/`) — per tracked company, proposes competitors and their source URLs; human reviews/edits before anything saves.
+2. **Collectors** (`backend/collectors/`) — one per source type (pricing, feature, job_posting, news, community, review, general), each hashes fetched content and only passes it downstream if the hash changed.
+3. **Change detector** (`backend/detection/`) — embeds old vs. new content, flags a real change only when cosine similarity drops below a tuned threshold. Precision-tested against a hand-labeled eval set in `/eval`.
+4. **Analyst** (`backend/analysis/analyst.py`) — retrieves related historical context via pgvector similarity search, prompts the LLM for `{what_changed, why_it_matters, suggested_response}`.
+5. **Validator** (`backend/analysis/validator.py`) — checks the analyst's claim against the actual diffed content before trusting it; flagged failures are logged, not silently dropped.
+6. **Scorer** (`backend/scoring/scorer.py`) — assigns High/Medium/Low priority via a small, explicit rubric.
+7. **Report assembler + renderer** (`backend/report/`) — turns the period's scored signals into a designed PDF and web report; owner controls visibility (private/invited/public) once live.
+8. **Chat** (`backend/chat/qa.py`) — a Q&A assistant scoped to one report's signals, or (via pgvector search) a whole company's history.
 
-Each collector:
-- Fetches current content
-- Hashes it (e.g. SHA-256 of normalized text)
-- Compares against the last stored hash for that source — only passes content downstream if the hash changed
-- Respects rate limits and robots.txt; includes backoff/retry logic
-
-### 4.2 Change Detector
-- Naive text diffing is too noisy (cosmetic rewording ≠ real change) — do NOT just diff raw text.
-- Instead: embed the old and new content, compute cosine similarity, and flag as a "real" change only if similarity falls below a defined threshold.
-- Build a small labeled eval set (20-30 hand-labeled examples of "real signal" vs "noise") to tune and report a precision number for this step. Keep this eval set in the repo (`/eval/`) — it's a legitimate engineering artifact worth showing.
-
-### 4.3 Analyst (RAG + LLM)
-- For each detected change, retrieve relevant context via pgvector similarity search
-- Prompt the LLM to produce structured output: `{source, what_changed, why_it_matters, suggested_response (optional)}`
-- **Validator step**: before accepting the analyst's output, check it against the source content (e.g. does the "what changed" claim actually appear in the diffed content) to reduce hallucination. Log/flag anything that fails this check rather than silently dropping it.
-
-### 4.4 Scorer
-- Assign each signal a priority: High / Medium / Low
-- Simple, explainable rubric to start (e.g. pricing changes > new feature launches > hiring signals > press mentions) — keep this tunable, not hardcoded deep in logic
-
-### 4.5 Report Assembler
-- Takes the week's structured, scored signals
-- Populates:
-  - Header (company + date range + one-line headline)
-  - Executive summary (3-4 sentences)
-  - Signal cards (source / what changed / why it matters / suggested response / priority tag)
-  - Chart data: signal volume by competitor, category breakdown, activity timeline
-  - Appendix of raw source links
-
-### 4.6 Renderer
-- Renders the assembled report as: (a) a styled PDF via HTML/CSS → WeasyPrint, and/or (b) data written to Supabase for the Next.js frontend to render as a webpage
-- Design the report to look like a finished analyst artifact — not a developer's raw output. Clean typography, real hierarchy, charts embedded (not just described in text).
+For the actual current database schema, read `infra/sql/schema.sql` directly rather than trusting a copy here — it's the single source of truth and changes often enough that a duplicate would drift.
 
 ---
 
-## 5. Database Schema (Supabase / Postgres)
-
-```sql
--- Companies being tracked (the pilot target, e.g. ComplyDo)
-CREATE TABLE target_companies (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Competitors tracked per target company
-CREATE TABLE competitors (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    target_company_id UUID REFERENCES target_companies(id),
-    name TEXT NOT NULL,
-    website TEXT
-);
-
--- Sources being monitored per competitor
-CREATE TABLE sources (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    competitor_id UUID REFERENCES competitors(id),
-    source_type TEXT CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news')),
-    url TEXT NOT NULL,
-    last_content_hash TEXT,
-    last_checked_at TIMESTAMPTZ
-);
-
--- Raw snapshots of scraped content (for diffing/history)
-CREATE TABLE snapshots (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id UUID REFERENCES sources(id),
-    content TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    embedding VECTOR(1536),  -- adjust dimension to match embedding model used
-    fetched_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Detected + analyzed signals
-CREATE TABLE signals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id UUID REFERENCES sources(id),
-    old_snapshot_id UUID REFERENCES snapshots(id),
-    new_snapshot_id UUID REFERENCES snapshots(id),
-    similarity_score FLOAT,
-    what_changed TEXT,
-    why_it_matters TEXT,
-    suggested_response TEXT,
-    priority TEXT CHECK (priority IN ('high', 'medium', 'low')),
-    validated BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Assembled weekly reports
-CREATE TABLE reports (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    target_company_id UUID REFERENCES target_companies(id),
-    week_start DATE NOT NULL,
-    week_end DATE NOT NULL,
-    headline TEXT,
-    executive_summary TEXT,
-    signal_ids UUID[],
-    chart_data JSONB,
-    pdf_url TEXT,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
----
-
-## 6. Repo Structure
+## 5. Repo structure
 
 ```
 founders-radar/
-├── README.md                    # portfolio-facing — explain the project, the "why", screenshots of a real report
-├── CLAUDE.md                    # this file
-├── pipeline/                    # Python backend — the actual engine
+├── README.md              # portfolio-facing
+├── context.md             # this file
+├── backend/                # Python pipeline + FastAPI app
 │   ├── collectors/
-│   │   ├── pricing_collector.py
-│   │   ├── feature_collector.py
-│   │   ├── jobs_collector.py
-│   │   └── news_collector.py
 │   ├── detection/
-│   │   └── change_detector.py
-│   ├── analysis/
-│   │   ├── analyst.py           # RAG + LLM synthesis
-│   │   └── validator.py         # hallucination-check step
+│   ├── discovery/
+│   ├── analysis/           # analyst.py, validator.py
 │   ├── scoring/
-│   │   └── scorer.py
-│   ├── report/
-│   │   ├── assembler.py
-│   │   ├── charts.py
-│   │   └── pdf_renderer.py
-│   ├── db/
-│   │   ├── models.py            # SQLAlchemy models matching schema above
-│   │   └── session.py
-│   ├── main.py                  # FastAPI app entrypoint / pipeline orchestration
-│   └── requirements.txt
-├── eval/
-│   ├── change_detection_eval_set.json   # labeled real-signal vs noise examples
-│   └── run_eval.py
-├── frontend/                    # Next.js app — deployed on Vercel
-│   ├── app/
-│   │   └── report/[id]/page.tsx # renders a finished report from Supabase
-│   ├── components/
-│   └── package.json
-└── infra/
-    ├── cloud_function/           # scheduled pipeline trigger (GCP)
-    └── scheduler_config.yaml
+│   ├── chat/                # qa.py — founder Q&A assistant
+│   ├── report/              # assembler.py, charts.py, pdf_renderer.py, diff_util.py, storage.py
+│   ├── db/                  # models.py, session.py, seed.py
+│   └── main.py               # FastAPI app entrypoint / pipeline orchestration
+├── eval/                    # labeled change-detection eval set + precision runner
+├── frontend/                 # Next.js app — auth, dashboard, company management, custom
+│                              # widget dashboard, report viewer/sharing, marketing site
+├── infra/
+│   ├── api/                  # Dockerfile + cloudbuild.yaml for the public Cloud Run API service
+│   ├── cloud_function/       # Dockerfile + entrypoint for the private scheduled Cloud Run service
+│   ├── scheduler_config.yaml
+│   └── sql/schema.sql        # authoritative current database schema
+└── docs/                      # 09-v2-plan.md (plan), decisions.md (dated build log), others per-stage
 ```
 
 ---
 
-## 7. Build Phases (matches the 2-week plan already agreed)
-
-**Phase 1 — Scope + report design (days 1-2)**
-- Finalize ComplyDo + 2-3 real competitors and exact source URLs
-- Design report layout (can be a static HTML/CSS mockup before any pipeline logic exists)
-
-**Phase 2 — Data pipeline (days 3-5)**
-- Build collectors, hashing/dedup, change detection with embedding similarity
-- Populate the eval set, get an initial precision number
-
-**Phase 3 — Analysis pipeline (days 6-8)**
-- RAG retrieval + analyst step + validator step
-- Scoring logic
-
-**Phase 4 — Report assembly (days 9-11)**
-- Chart generation
-- HTML/CSS report template wired to real pipeline output
-- PDF rendering
-
-**Phase 5 — Run + polish (days 12-14)**
-- Full end-to-end run on ComplyDo's real market
-- Review output as if you were the founder receiving it; cut noise
-- Polish visual design, write the README, prep the GitHub repo for public viewing
-
----
-
-## 8. Environment Variables (expected)
+## 6. Environment variables (current)
 
 ```
-DATABASE_URL=            # Supabase Postgres connection string
+DATABASE_URL=             # Supabase Postgres connection string (postgresql+psycopg:// scheme)
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
-OPENAI_API_KEY=          # or equivalent, for embeddings + LLM calls
-ANTHROPIC_API_KEY=       # if using Claude for the analyst step
-GCP_PROJECT_ID=          # for Cloud Functions/Scheduler
+SUPABASE_SERVICE_ROLE_KEY=  # backend-only, uploads PDFs to Storage, bypasses RLS
+GROQ_API_KEY=              # analyst, discovery, chat, exec-summary synthesis
+TAVILY_API_KEY=            # discovery web search
+GCP_PROJECT_ID=
+PIPELINE_SHARED_SECRET=    # required once the API service is public — see backend/main.py
 ```
 
----
-
-## 9. Coding Conventions
-
-- Python: type hints throughout, docstrings on all pipeline functions (this code will be read by others as a portfolio piece)
-- Keep each pipeline stage (collect / detect / analyze / score / assemble / render) as an independently callable, independently testable function — do not couple stages tightly, so each can be demoed or debugged in isolation
-- Log every pipeline run's key decisions (what was flagged as a change, what the similarity score was, what got filtered as noise) — this makes the "how do you avoid false positives" story concrete and demoable, not just claimed
-- Commit in logical, readable chunks (one phase/feature per commit or small group of commits) — this repo will be public and may be reviewed by a technical founder
+No OpenAI or Anthropic key needed anywhere — embeddings run locally, LLM calls go through Groq.
 
 ---
 
-## 10. Open Decisions (flag these back to the user, don't assume)
+## 7. Coding conventions
 
-- Exact competitor list + source URLs for the ComplyDo pilot — not yet finalized
-- Final choice of embeddings/LLM provider (OpenAI vs Anthropic vs other) — not yet finalized
-- Whether the final delivery is PDF-only, webpage-only, or both — leaning both, but confirm before building both to avoid wasted work
+- Python: type hints throughout, docstrings on pipeline functions.
+- Keep each pipeline stage (collect / detect / analyze / score / assemble / render) independently callable and testable — don't couple stages tightly.
+- Log every pipeline run's key decisions (what was flagged as a change, what the similarity score was, what got filtered as noise).
+- Commit in logical, readable chunks — this repo is public.
+- When something non-obvious gets decided or a real bug gets found and fixed, write it up in `docs/decisions.md` rather than only in a commit message — that file is what lets a fresh read of the project (human or AI) understand *why*, not just *what*.

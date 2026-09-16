@@ -1,5 +1,7 @@
 # Founder's Radar
 
+**Live:** [founders-radar-bpr6axidl-mmoizmaredia-7856.vercel.app](https://founders-radar-bpr6axidl-mmoizmaredia-7856.vercel.app)
+
 A market-intelligence platform that tracks a company's competitors — pricing, features, hiring, press, review-site ratings, and community buying-intent chatter — and turns detected changes into a designed report, on a schedule, per company.
 
 ## Why this exists
@@ -67,11 +69,10 @@ No OpenAI account needed — embeddings run locally via `sentence-transformers` 
 
 ## Status
 
-Live in production on GCP (Cloud Run + Cloud Scheduler, per-company schedule). Both the original pipeline and the v2 multi-tenant product have been verified against real data and real accounts, not synthetic fixtures — see `docs/decisions.md` for the full dated trail, including every real bug found along the way (scraping edge cases, a Cloudflare-protected page, and a Supabase RLS gap that made reports/signals world-readable until it was caught and fixed).
+Fully live: frontend on Vercel, backend split across two GCP Cloud Run services — a public one (`founders-radar-api`) serving discovery/chat/on-demand runs for the frontend, and a private one on a daily Cloud Scheduler trigger for per-company scheduled reports. Both the original pipeline and the v2 multi-tenant product have been verified against real data and real accounts, not synthetic fixtures — see `docs/decisions.md` for the full dated trail, including every real bug found along the way (scraping edge cases, a Cloudflare-protected page, a Supabase RLS gap that made reports/signals world-readable, and — caught only once the interactive backend was actually deployed publicly for the first time — two production secrets with a corrupting trailing newline).
 
 Open items:
 - Populate `/eval` with more real labeled examples — the change-detection similarity threshold is still calibrated on a small hand-labeled set (see `docs/decisions.md`).
 - Email notifications on new reports (Phase 3 of the v2 plan) — provider not yet chosen.
-- No git remote is configured on the dev machine yet — the full history exists only as local commits until this is pushed somewhere.
 
 See [`docs/09-v2-plan.md`](./docs/09-v2-plan.md) for the current plan/status and [`docs/decisions.md`](./docs/decisions.md) for every non-obvious choice made along the way. [`docs/00-overview.md`](./docs/00-overview.md) still describes the original v1 pipeline build plan, which v2 builds on top of rather than replaces.
