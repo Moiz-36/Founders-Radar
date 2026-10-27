@@ -83,6 +83,7 @@ def trigger_run(target_company_id: str) -> dict:
 class DiscoverCompetitorsRequest(BaseModel):
     company_name: str
     website: str | None = None
+    description: str | None = None
 
 
 class DiscoverSourcesRequest(BaseModel):
@@ -94,7 +95,7 @@ class DiscoverSourcesRequest(BaseModel):
 def discover_competitors(body: DiscoverCompetitorsRequest) -> dict:
     """Proposes candidate competitors — never written to the DB here. The frontend shows
     these for the user to review/edit/remove before anything is saved (docs/09-v2-plan.md)."""
-    candidates = find_competitors(body.company_name, body.website)
+    candidates = find_competitors(body.company_name, body.website, body.description)
     return {"competitors": [c.__dict__ for c in candidates]}
 
 
