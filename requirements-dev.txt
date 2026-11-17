@@ -1,0 +1,7 @@
+-r backend/requirements.txt
+# Tests: `python -m pytest` (see tests/conftest.py — runs against a throwaway local Postgres,
+# never the live database, with outbound network blocked).
+pytest==9.2.0
+pgserver==0.1.4
+httpx==0.28.1
+ruff==0.17.5

@@ -1,5 +1,5 @@
 """Founder Q&A chatbot (docs/09-v2-plan.md's chat feature — see docs/decisions.md for the
-phased plan). Two scopes share one Groq call (`answer_question`) and message shape:
+phased plan). Two scopes share one streaming Groq call (`stream_answer`) and message shape:
 
 - Report-scoped (Phase 1): answers using only one report's own signals as context.
 - Company-scoped (Phase 2): answers using pgvector semantic search over ALL of a company's
@@ -7,25 +7,22 @@ phased plan). Two scopes share one Groq call (`answer_question`) and message sha
   for questions a single report's fixed signal list can't answer, e.g. "has Drata changed
   pricing this quarter?"
 
-Reuses the same Groq client pattern as backend/analysis/analyst.py (OpenAI SDK pointed at
-Groq's OpenAI-compatible endpoint) rather than a second client setup.
+The Groq client itself lives in backend/llm.py, shared with every other LLM call.
 """
 
-import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from openai import OpenAI
+from backend.llm import stream_text
 
-_client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
-
-MODEL = "openai/gpt-oss-120b"
 MAX_CONTENT_CHARS = 800  # per snapshot side — kept tight to control tokens/cost per message
 # Hard ceiling on the report-scope signals block (see build_report_system_prompt) — roughly
 # ~2,700 tokens at English's ~4.5 chars/token, leaving headroom under Groq's 8,000 TPM cap for
 # the rest of the prompt (headline/summary/style text), chat history, and the question itself.
 MAX_SIGNALS_BLOCK_CHARS = 12_000
-MAX_ANSWER_TOKENS = 400  # answers are meant to be short by default (see STYLE_INSTRUCTIONS)
+# Brevity comes from STYLE_INSTRUCTIONS, not this cap: the model's hidden reasoning tokens count
+# against max_tokens too, and the old 400 could cut an answer off mid-sentence.
+MAX_ANSWER_TOKENS = 1024
 HISTORY_TURNS_KEPT = 3  # only the last N user+assistant pairs are sent — bounds token growth as a chat gets long
 
 # Applies to both scopes: short, plain-English answers by default. A founder can still ask for
@@ -212,14 +209,4 @@ def stream_answer(system_prompt: str, history: list[ChatMessage], question: str)
     messages.extend({"role": m.role, "content": m.content} for m in _trim_history(history))
     messages.append({"role": "user", "content": question})
 
-    stream = _client.chat.completions.create(
-        model=MODEL,
-        max_tokens=MAX_ANSWER_TOKENS,
-        extra_body={"reasoning_effort": "low"},
-        messages=messages,
-        stream=True,
-    )
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+    yield from stream_text(messages, max_tokens=MAX_ANSWER_TOKENS)

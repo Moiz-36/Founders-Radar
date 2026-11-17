@@ -1,24 +1,31 @@
 # Change Detection
 
 ## Purpose
-Decide whether a hash-changed piece of content is a *real* signal (pricing change, new feature, etc.) or just cosmetic rewording — via embedding cosine similarity, not raw text diffing.
+Decide whether a hash-changed piece of content is a *real* signal (pricing change, new feature, new role) or just noise — without ever silently missing a real change.
 
 ## File structure
 ```
-backend/detection/change_detector.py    # embed(), cosine_similarity(), is_real_change()
-eval/change_detection_eval_set.json      # hand-labeled real-vs-noise examples
-eval/run_eval.py                         # runs is_real_change() against the eval set, reports precision/recall
+backend/detection/change_detector.py    # detect_change(), meaningful_tokens(), embed(), cosine_similarity()
+eval/change_detection_eval_set.json      # hand-labeled real-vs-noise examples, incl. long realistic pages
+eval/run_eval.py                         # runs detect_change() against the eval set, reports precision/recall
+tests/test_detection.py                  # unit tests, incl. the eval set as a regression gate
 ```
 
-## Build steps
-1. `embed(text)` runs a local `sentence-transformers` model (`all-MiniLM-L6-v2`, 384-dim, normalized) — no API key, no per-call cost. Model downloads once (~90MB) on first use and is cached by `sentence-transformers`.
-2. `is_real_change(old_text, new_text, threshold)` embeds both, computes cosine similarity, and flags a real change when similarity drops **below** the threshold.
-3. Tune `DEFAULT_SIMILARITY_THRESHOLD` against the eval set: `./.venv/Scripts/python -m eval.run_eval --threshold 0.97` (sweep values, watch precision/recall).
-4. Populate `eval/change_detection_eval_set.json` with real labeled old/new snapshot pairs once real competitor content is available — the 2 examples in there now are synthetic placeholders.
+## How it works (two stages)
+1. **Collector hash** (`backend/collectors/base.py`): if the whitespace-normalized page text is byte-identical to last time, nothing else runs.
+2. **Stage 1 — deterministic diff** (`detect_change(old, new)`): a word-level diff over *meaningful* tokens only. Punctuation, case, filler words ("the", "per", …) and bare years are ignored, and `$49/month` tokenizes the same as `$49 per month`. If nothing meaningful differs, it's noise: the new hash is remembered, no snapshot is stored, no LLM call is made. Otherwise the changed regions (old vs new wording, with a few words of context) are handed to the analyst.
+3. **Stage 2 — LLM judgement** (`backend/analysis/analyst.py`): the analyst explains the change and rates its `significance`; a change rated `none` is dropped (its snapshot is kept as the new baseline to diff against).
+
+Stage 1 is tuned for recall: it may pass a meaningless wording edit to the LLM (costing one call) but must never drop a real change.
+
+## Why not embeddings (the original design)
+The first version compared whole-page embeddings and flagged a change when cosine similarity fell below 0.98. That cannot work with `all-MiniLM-L6-v2`: the model reads only the first 256 tokens of its input, so a price change further down a pricing page scored a similarity of exactly **1.0000** and was never reported. Even embedding only the changed region doesn't help — embeddings barely register numbers ("$199"→"$249" scored 0.9991, a copyright-year bump 0.9928). Measured 2026-11-17; see [decisions.md](./decisions.md).
+
+Embeddings are still used where they're good — retrieval (pgvector RAG for the analyst, company-scoped chat). `embed()` now averages chunk embeddings so the vector covers the whole page, not just its first ~200 words.
 
 ## Status
-Runs correctly. Threshold recalibrated once already (0.92 → 0.98) after discovering MiniLM's similarity scores run much higher/more compressed than OpenAI's embeddings would — see [decisions.md](./decisions.md). **Still only tuned on 2 synthetic examples — not trustworthy yet.**
+`python -m eval.run_eval`: precision 1.000, recall 1.000 on 13 labeled examples (8 real, 4 noise, 1 borderline handed to the LLM by design), including deep-page price changes the old detector missed. Enforced by `tests/test_detection.py`. Still worth extending the eval set with real snapshot pairs as they accumulate.
 
 ## Gotchas
-- MiniLM is a smaller, less semantically precise model than OpenAI's `text-embedding-3-small`. If precision against a real eval set turns out poor, the fallback options are: a bigger local model (e.g. `all-mpnet-base-v2`, slower but more accurate) or paying for OpenAI/another embeddings API.
-- The threshold is a single global constant — there's no per-source-type tuning yet (pricing pages vs. changelog pages may have very different "real change" similarity distributions). Worth revisiting once there's real data to look at.
+- Volatile numbers that aren't signals (vote counts, "posted 3 days ago") pass stage 1 and cost an LLM call each run. The HN collectors leave vote/comment counts out of their content for exactly this reason; add similar stripping to a collector if a source turns out to be noisy.
+- Bare years are treated as noise globally (copyright footers). A real change that *only* changes a year ("available until 2026" → "2027") would be missed — accepted trade-off.

@@ -27,9 +27,10 @@ A second, unrelated reason the deploy can't be a plain `gcloud functions deploy 
    gcloud run deploy founders-radar-pipeline \
      --image=<region>-docker.pkg.dev/<project>/<repo>/founders-radar-pipeline \
      --region=<region> --no-allow-unauthenticated \
-     --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url>,SUPABASE_URL=<url>,SUPABASE_SERVICE_ROLE_KEY=<key> \
-     --memory=2Gi --cpu=2 --timeout=540s
+     --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url> \
+     --memory=2Gi --cpu=2 --timeout=3600s
    ```
+   `--timeout=3600s`: the daily pass runs every due company in one request; `backend/main.py` stops starting new ones after `PIPELINE_TIME_BUDGET_SECONDS` (default 2700) so it always finishes in time.
    `--memory=2Gi --cpu=2`, not the `1Gi` an earlier version of this doc recommended — see the Status section below for why.
 3. Grant a dedicated service account `roles/run.invoker` on that service, then create the Cloud Scheduler job with OIDC auth pointed at it — full command in the comment block at the top of `infra/scheduler_config.yaml`.
 4. Fill in the real Cloud Run service URL and invoker service account email in `scheduler_config.yaml` once known.
@@ -55,9 +56,12 @@ A second bug found the same day: `report.pdf_url` was just the local container f
 path (`/app/backend/output/<id>/report.pdf`) — meaningless outside the container, and gone on
 the next cold start. Fixed in `backend/report/storage.py`: the rendered PDF is now uploaded to
 a private Supabase Storage bucket (`reports`, created via `infra/sql/schema.sql`) and `pdf_url`
-is a signed URL (30-day expiry) instead. Requires `SUPABASE_SERVICE_ROLE_KEY` as a new env var
-on the Cloud Run service (added to the deploy command above) — backend-only, never expose it
-to the frontend.
+is a signed URL (30-day expiry) instead. (Superseded 2026-11-17: PDFs are now rendered on demand from the report page, so the upload,
+`storage.py` and the `SUPABASE_*` backend env vars are gone — see `docs/06-report-assembly.md`.)
+
+**The public API service (`founders-radar-api`, `infra/api/`)** must run with
+`--no-cpu-throttling`: "Run report now" returns 202 immediately and finishes the run in a
+background thread, which Cloud Run would otherwise starve of CPU once the response is sent.
 
 ## Gotchas
 - `run_weekly_pipeline()` in `main.py` reads `target_company_id` from either an env var or the request body — supports both a manual/on-demand single-company trigger and the default multi-tenant path (`run_pipeline_for_all_active_companies()`, no `target_company_id` given) that the daily Scheduler job actually uses. See the 2026-09-05 entries in `docs/decisions.md`.

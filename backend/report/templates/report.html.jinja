@@ -35,8 +35,8 @@
   {% if chart_paths %}
   <h2>At a Glance</h2>
   <div class="charts">
-    <img src="{{ chart_paths.volume_by_competitor }}">
-    <img src="{{ chart_paths.category_breakdown }}">
+    {% if chart_paths.volume_by_competitor %}<img src="{{ chart_paths.volume_by_competitor }}">{% endif %}
+    {% if chart_paths.category_breakdown %}<img src="{{ chart_paths.category_breakdown }}">{% endif %}
   </div>
   {% endif %}
 

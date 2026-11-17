@@ -200,6 +200,15 @@ export default function NewCompanyPage() {
       return;
     }
 
+    // The inserts below are separate requests, not one transaction. If one fails part-way,
+    // delete the company again (cascades to whatever competitors/sources were saved) so the
+    // user isn't left with a half-built company and can simply retry.
+    async function abort(message: string) {
+      await supabase.from("target_companies").delete().eq("id", company.id);
+      setError(message);
+      setSaving(false);
+    }
+
     for (const competitor of competitors) {
       if (!competitor.name.trim()) continue;
 
@@ -215,8 +224,7 @@ export default function NewCompanyPage() {
         .single();
 
       if (competitorError || !competitorRow) {
-        setError(competitorError?.message ?? "Failed to create competitor.");
-        setSaving(false);
+        await abort(competitorError?.message ?? "Failed to create competitor.");
         return;
       }
 
@@ -231,18 +239,16 @@ export default function NewCompanyPage() {
       if (sourcesToInsert.length > 0) {
         const { error: sourceError } = await supabase.from("sources").insert(sourcesToInsert);
         if (sourceError) {
-          setError(sourceError.message);
-          setSaving(false);
+          await abort(sourceError.message);
           return;
         }
       }
     }
 
-    // Best-effort: generate the first report right away instead of making the user wait for
-    // the next scheduled run. If the pipeline service isn't reachable (e.g. not running
-    // locally), fail quietly — the company page just shows "no reports yet" and the
-    // scheduled run will pick it up on the configured interval.
-    setSavingLabel("Generating your first report...");
+    // Best-effort: start the first report right away instead of waiting for the next
+    // scheduled run. This returns as soon as the run has started; the company page shows its
+    // progress. If the pipeline isn't reachable, the scheduled run picks the company up.
+    setSavingLabel("Starting your first report...");
     try {
       await fetch(`/api/companies/${company.id}/run`, { method: "POST" });
     } catch {

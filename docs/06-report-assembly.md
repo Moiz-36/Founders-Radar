@@ -1,27 +1,27 @@
 # Report Assembly
 
 ## Purpose
-Turn a week's scored signals into a finished, designed artifact: a headline + executive summary, sorted signal cards, charts, and a source appendix — rendered to PDF.
+Turn a period's new signals into a report — headline, executive summary, sorted signal cards, charts — shown on the web, and downloadable as a PDF on demand.
 
 ## File structure
 ```
-backend/report/assembler.py               # SignalCard, build_signal_cards(), generate_headline_and_summary(), build_chart_data(), assemble_report()
-backend/report/charts.py                  # matplotlib -> PNG (volume-by-competitor bar chart, category-breakdown pie chart)
-backend/report/pdf_renderer.py            # Jinja2 HTML template -> PDF via Playwright/Chromium
-backend/report/templates/report.html.jinja # the actual report layout/styling
+backend/report/assembler.py                # SignalCard, build_signal_cards(), generate_headline_and_summary(), build_chart_data(), assemble_report()
+backend/report/diff_util.py                # word-level old/new diff as escaped HTML (PDF only; the web report diffs client-side)
+backend/report/charts.py                   # matplotlib -> PNG (volume per competitor, category breakdown)
+backend/report/pdf_renderer.py             # render_report_pdf(): Jinja2 template -> PDF via Playwright/Chromium
+backend/report/templates/report.html.jinja # the PDF layout
 ```
 
-## Build steps
-1. `build_signal_cards()` turns `Signal` rows into `SignalCard` dataclasses (joins in competitor name via `source.competitor`), sorted high-priority-first.
-2. `generate_headline_and_summary()` sends the week's signals to Groq and expects `{"headline": ..., "executive_summary": ...}` back — same client setup as [04-analyst-validator.md](./04-analyst-validator.md).
-3. `build_chart_data()` computes two breakdowns (signal volume per competitor, signal count per category) as plain dicts, stored in `reports.chart_data` (JSONB).
-4. `charts.py` renders those two dicts to PNG files via matplotlib (headless `Agg` backend).
-5. `pdf_renderer.py` renders `report.html.jinja` with the report data + chart image paths, writes it to a temp `.html` file, opens it in Playwright's Chromium via `page.goto()`, and calls `page.pdf()`.
+## How it works
+1. After collecting, the pipeline gathers the company's signals not yet in any report. **If there are none, no report is made** (the run is recorded as `skipped`).
+2. `assemble_report()` builds the signal cards (high priority first), asks the LLM for a headline + executive summary, computes chart data, and saves the `Report` row.
+3. The web report (`frontend/app/report/[id]`) renders straight from the database.
+4. The PDF is rendered only when someone clicks **Download PDF**: `frontend/app/api/reports/[id]/pdf` checks the viewer can see the report (RLS), then calls the backend's `GET /reports/{id}/pdf`, which renders charts + template in a temp directory and prints it with Chromium.
 
-## Status
-**Fully smoke-tested end-to-end** with fake signal data — charts render correctly and the PDF layout (headline, exec summary callout box, priority badges, signal cards, charts, source appendix) all look right. `generate_headline_and_summary()` has also been run against the **real Groq API** (not mocked) with real signal data and returned a coherent headline + summary. Not yet run with a real `Report`/`Signal` pulled from the database.
+## Why on-demand PDF
+PDFs used to be rendered and uploaded to Supabase Storage on every run, but nothing in the app linked to them, the signed URL expired after 30 days, and it was the heaviest step of a run. `reports.pdf_url` is now legacy (left NULL). See [decisions.md](./decisions.md), 2026-11-17.
 
 ## Gotchas
-- **Do not use `page.set_content()` for the PDF step** — Chromium doesn't reliably resolve local `file://` `<img>` sources against a page with no real navigation, so charts silently render as broken image icons. Must write the HTML to disk and `page.goto()` it (already implemented this way — see [decisions.md](./decisions.md) for how this was discovered).
-- Chart image paths are converted to absolute `file://` URIs (`Path.resolve().as_uri()`) before being handed to the template — relative paths won't resolve reliably either.
-- The `@page` CSS rule in the template controls PDF page size/margins; `page.pdf(format="A4", ...)` in the renderer should match it to avoid inconsistent margins.
+- **Do not use `page.set_content()` for the PDF** — Chromium doesn't reliably resolve local `file://` `<img>` sources on a page with no real navigation. The HTML is written to disk and opened with `page.goto()`.
+- The template is **autoescaped**: headlines and signal text come from an LLM reading scraped third-party pages and must never be interpreted as HTML. Only the pre-escaped diff is marked `|safe`.
+- Charts with no data are skipped (matplotlib can't draw an empty pie).

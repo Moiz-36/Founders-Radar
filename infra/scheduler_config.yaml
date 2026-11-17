@@ -22,8 +22,11 @@
 #      gcloud run deploy founders-radar-pipeline \
 #        --image=<region>-docker.pkg.dev/<project>/<repo>/founders-radar-pipeline \
 #        --region=<region> --no-allow-unauthenticated \
-#        --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url>,SUPABASE_URL=<url>,SUPABASE_SERVICE_ROLE_KEY=<key> \
-#        --memory=2Gi --cpu=2 --timeout=540s
+#        --set-env-vars=GROQ_API_KEY=<key>,TAVILY_API_KEY=<key>,DATABASE_URL=<url> \
+#        --memory=2Gi --cpu=2 --timeout=3600s
+#    --timeout=3600s (Cloud Run's max): the daily pass handles every due company in one request.
+#    backend/main.py stops starting new companies after PIPELINE_TIME_BUDGET_SECONDS (2700 by
+#    default) so it finishes in time; any left over stay due and go first the next day.
 #    NOTE: 1Gi OOM'd on every cold start in production (Playwright/Chromium + the local
 #    embeddings model both loading at once used ~1050 MiB) — confirmed 2026-09-09, use 2Gi.
 #    Also: env vars were set via Secret Manager (--set-secrets=GROQ_API_KEY=GROQ_API_KEY:latest,...)

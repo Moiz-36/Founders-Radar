@@ -143,10 +143,15 @@ ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS report_interval_days INTEG
 -- backend/analysis/analyst.py.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS is_baseline BOOLEAN NOT NULL DEFAULT false;
 
--- snapshots already has RLS enabled (Supabase's default for new tables) but had zero
+-- snapshots had RLS enabled on the live project (via the Supabase dashboard) but zero
 -- policies, meaning nobody could read it via the anon key — not a leak, but it also silently
 -- blocked the "see what was actually captured" snapshot view added in docs/09-v2-plan.md.
 -- Owner-scoped read, same join pattern as the sources policy above.
+-- The ENABLE was missing from this file until 2026-11-17 (caught by tests/test_rls.py): tables
+-- created through SQL do NOT get RLS by default, so a database built from this file alone left
+-- every snapshot — the full scraped content of every user's competitor pages — readable by
+-- anyone with the anon key. Idempotent on a database where it's already enabled.
+ALTER TABLE snapshots ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "owner read access" ON snapshots;
 CREATE POLICY "owner read access" ON snapshots
     FOR SELECT USING (
@@ -158,7 +163,8 @@ CREATE POLICY "owner read access" ON snapshots
         )
     );
 
--- Private bucket for rendered report PDFs (backend/report/storage.py). Not public: these are
+-- (Legacy, unused since 2026-11-17: PDFs are rendered on demand now — backend/report/pdf_renderer.py.)
+-- Private bucket for rendered report PDFs (formerly backend/report/storage.py). Not public: these are
 -- per-tenant competitive-intelligence reports. The backend uploads and signs URLs using the
 -- service role key, which bypasses RLS entirely, so no storage.objects policies are needed
 -- here — only the service role can ever read/write this bucket directly.
@@ -540,3 +546,14 @@ DROP TRIGGER IF EXISTS trg_delete_chat_messages_for_report ON reports;
 CREATE TRIGGER trg_delete_chat_messages_for_report
     AFTER DELETE ON reports
     FOR EACH ROW EXECUTE FUNCTION delete_chat_messages_for_report();
+
+-- Pipeline run status (2026-11-17): "Run report now" used to wait for the whole run inside one
+-- HTTP request, which outlived the frontend's serverless request limit (the user saw "Run
+-- failed" while the run carried on). The backend now claims the company, runs in the
+-- background, and records the outcome here; the frontend polls it. The atomic claim also
+-- stops a double-click from running the same company twice at once. See backend/main.py's
+-- claim_run(). Readable by the owner through target_companies' existing owner policy.
+ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS run_status TEXT
+    CHECK (run_status IN ('running', 'done', 'skipped', 'failed'));
+ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS run_started_at TIMESTAMPTZ;
+ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS run_finished_at TIMESTAMPTZ;

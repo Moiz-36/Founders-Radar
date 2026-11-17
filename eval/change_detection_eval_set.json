@@ -1,19 +1,19 @@
 {
-  "_comment": "Hand-labeled examples of 'real signal' vs 'noise' content-change pairs, used to tune and report a precision number for backend/detection/change_detector.py. Populate with real snapshot pairs once the ComplyDo competitor list + source URLs are finalized (see context.md section 10) — this file currently ships with placeholder examples only so run_eval.py has something to execute against.",
+  "_comment": "Hand-labeled old/new content pairs for backend/detection/change_detector.py's first-stage filter. 'real' = a founder would want to know; 'noise' = cosmetic. '{page}' in a text is replaced with the long shared 'page' body below, so changes can sit deep in a realistic-length page (the old embedding detector could not see past the first ~200 words). Stage 1 is tuned for recall: it may pass borderline wording changes on to the LLM analyst (stage 2 rates their significance), so 'noise' examples marked stage2 are expected to pass stage 1 and are counted separately. Replace/extend with real snapshot pairs as they accumulate.",
+  "page": "pricing plans for growing teams. our platform helps teams automate compliance evidence collection, monitor controls continuously, and prepare for audits with integrations across cloud providers, hr systems and identity tools. trusted by over two thousand companies. soc 2, iso 27001, hipaa and gdpr frameworks supported out of the box. continuous monitoring runs hundreds of automated tests every hour against your infrastructure and alerts the right owner when something drifts. policy templates are written by former auditors and can be customized in a few clicks. the trust center lets you share your security posture with prospects without a single email. vendor risk management tracks every third party you rely on, with questionnaires sent and scored automatically. employee onboarding and offboarding checklists keep access reviews tidy. our auditor network includes dozens of firms who already know the platform, which shortens the audit itself. customers typically reach audit readiness in weeks instead of months. starter plan $49 per month includes 5 users and email support. growth plan $199 per month includes 25 users, sso and priority support. enterprise plan contact sales for custom pricing, a dedicated success manager and a custom msa.",
   "examples": [
-    {
-      "id": "placeholder-noise-1",
-      "old_text": "Our Pro plan is $49/month and includes unlimited projects, priority support, and API access.",
-      "new_text": "Our Pro plan is $49 per month and includes unlimited projects, priority support, and API access.",
-      "label": "noise",
-      "note": "Cosmetic rewording only ('$49/month' -> '$49 per month'), no actual price or feature change."
-    },
-    {
-      "id": "placeholder-real-1",
-      "old_text": "Our Pro plan is $49/month and includes unlimited projects, priority support, and API access.",
-      "new_text": "Our Pro plan is $79/month and includes unlimited projects, priority support, API access, and SSO.",
-      "label": "real",
-      "note": "Price increase ($49 -> $79) plus a new feature (SSO) added to the plan."
-    }
+    {"id": "noise-unit-format", "label": "noise", "old_text": "Our Pro plan is $49/month and includes unlimited projects, priority support, and API access.", "new_text": "Our Pro plan is $49 per month and includes unlimited projects, priority support, and API access.", "note": "'$49/month' -> '$49 per month' only."},
+    {"id": "noise-copyright-year", "label": "noise", "old_text": "{page} © 2025 acme inc.", "new_text": "{page} © 2026 acme inc.", "note": "Footer year bump."},
+    {"id": "noise-punctuation", "label": "noise", "old_text": "{page}", "new_text": "{page}!", "note": "Punctuation only."},
+    {"id": "noise-filler-words", "label": "noise", "old_text": "{page} built for the teams of today.", "new_text": "{page} built for teams of today.", "note": "Dropped an article."},
+    {"id": "noise-reword-stage2", "label": "noise", "stage2": true, "old_text": "{page}", "new_text": "{page} (updated)", "note": "A word added that isn't meaningful — expected to reach the LLM, which rates it 'none'."},
+    {"id": "real-unit-format-price", "label": "real", "old_text": "Our Pro plan is $49/month and includes unlimited projects, priority support, and API access.", "new_text": "Our Pro plan is $79/month and includes unlimited projects, priority support, API access, and SSO.", "note": "Price increase plus SSO added."},
+    {"id": "real-deep-price-change", "label": "real", "old_text": "{page}", "new_text": "{page} growth plan now $249 per month.", "note": "Price stated deep in a long page — scored similarity 1.0000 under the old embedding detector."},
+    {"id": "real-deep-price-edit", "label": "real", "old_text": "starter $49. {page} footer.", "new_text": "starter $59. {page} footer.", "note": "Price change near the start of a long page."},
+    {"id": "real-new-plan", "label": "real", "old_text": "{page}", "new_text": "{page} scale plan $499 per month includes 100 users and a dedicated csm.", "note": "New plan added at the end."},
+    {"id": "real-feature-removed", "label": "real", "old_text": "growth includes sso and audit logs. {page}", "new_text": "growth includes audit logs. {page}", "note": "SSO removed from a plan (one word)."},
+    {"id": "real-percentage", "label": "real", "old_text": "{page} save 10% with annual billing.", "new_text": "{page} save 20% with annual billing.", "note": "Discount change."},
+    {"id": "real-new-job", "label": "real", "old_text": "open roles: senior backend engineer, remote. account executive, new york. {page}", "new_text": "open roles: senior backend engineer, remote. account executive, new york. head of ai, london. {page}", "note": "New senior role."},
+    {"id": "real-new-hn-story", "label": "real", "old_text": "acme raises series a — https://news.example/1", "new_text": "acme acquired by bigco — https://news.example/2\nacme raises series a — https://news.example/1", "note": "New story at the top of the news feed."}
   ]
 }

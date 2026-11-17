@@ -1,19 +1,21 @@
 """FastAPI app entrypoint and pipeline orchestration.
 
-Each stage (collect / detect / analyze / score / assemble / render) is called
-independently here so the pipeline can also be driven from a script or a
-scheduled Cloud Function without going through HTTP at all.
+Each stage (collect / detect / analyze / score / assemble) is called independently here so
+the pipeline can also be driven from a script or the scheduled Cloud Run service without
+going through HTTP at all.
 """
 
 import logging
 import os
+import threading
+import time
+import uuid
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
-from sqlalchemy import func, select
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select, update
 
 from backend.analysis.analyst import analyze_change, retrieve_related_context, summarize_baseline
 from backend.analysis.validator import validate_signal
@@ -30,12 +32,10 @@ from backend.collectors import COLLECTOR_BY_SOURCE_TYPE
 from backend.db.models import ChatMessage as ChatMessageRow
 from backend.db.models import Competitor, Report, Signal, Snapshot, Source, TargetCompany
 from backend.db.session import SessionLocal
-from backend.detection.change_detector import embed, is_real_change
+from backend.detection.change_detector import detect_change, embed
 from backend.discovery import find_competitors, find_sources
-from backend.report.assembler import assemble_report, build_signal_cards
-from backend.report.charts import render_report_charts
-from backend.report.pdf_renderer import render_pdf
-from backend.report.storage import upload_report_pdf
+from backend.report.assembler import assemble_report
+from backend.report.pdf_renderer import render_report_pdf
 from backend.scoring.scorer import score_signal
 
 logging.basicConfig(level=logging.INFO)
@@ -43,19 +43,24 @@ logger = logging.getLogger("founders_radar.pipeline")
 
 app = FastAPI(title="Founder's Radar Pipeline")
 
-OUTPUT_DIR = Path(__file__).parent / "output"
-
-# Every route below other than /health has "no auth of its own" by design — see the
-# comments on frontend/app/api/*/route.ts, which are what actually enforce ownership/session
-# checks before ever calling here. That was a safe assumption while this service was only
-# reachable via GCP's private (--no-allow-unauthenticated) Cloud Run invocation; it stops
-# being safe the moment this is deployed somewhere public like Render, where anyone who finds
-# the URL could hit /run/{id} or /discover/* directly and trigger real Groq/Tavily calls and
-# DB writes for free. PIPELINE_SHARED_SECRET closes that gap without touching every route's
-# own signature: unset (the local-dev default), this is a no-op; set it here and in the
-# frontend's own server-only env (see frontend/app/api/*/route.ts), and only requests
-# carrying the matching header get through.
+# The routes below have no per-user auth of their own: the frontend's app/api/* routes check
+# the caller's session and ownership (via RLS-scoped Supabase queries) before calling here.
+# This service is public on Cloud Run, so PIPELINE_SHARED_SECRET makes sure only that
+# frontend can call it — anyone else who finds the URL can't trigger Groq/Tavily calls or DB
+# writes. Unset (the local-dev default), the check is a no-op.
 PIPELINE_SHARED_SECRET = os.environ.get("PIPELINE_SHARED_SECRET")
+
+# A run marked "running" for longer than this is assumed dead (its instance was shut down
+# mid-run) and may be claimed again.
+RUN_STALE_AFTER = timedelta(minutes=45)
+# The scheduled pass stops *starting* new companies after this long, so it finishes inside
+# the Cloud Run request timeout (3600s — see infra/scheduler_config.yaml). Companies it
+# didn't reach stay due and go first tomorrow (most overdue first).
+SCHEDULED_TIME_BUDGET_SECONDS = int(os.environ.get("PIPELINE_TIME_BUDGET_SECONDS", "2700"))
+# The scheduler fires at a fixed time, but a run's own timestamps land a little after it.
+# Without slack, a 7-day company checked at 08:00:40 isn't due at 08:00:10 a week later and
+# slips to day 8.
+DUE_CHECK_GRACE = timedelta(hours=1)
 
 
 @app.middleware("http")
@@ -69,56 +74,372 @@ async def require_shared_secret(request: Request, call_next):
     return await call_next(request)
 
 
+def _parse_uuid(value: str, what: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"{what} not found") from None
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/run/{target_company_id}")
+# --- Running the pipeline ------------------------------------------------------------------
+
+
+def claim_run(company_id: uuid.UUID) -> bool:
+    """Atomically marks a company as running. False if it doesn't exist or a run is already
+    in progress — prevents a double-click (or the scheduler overlapping a manual run) from
+    processing the same sources twice and creating duplicate signals."""
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        claimed = session.execute(
+            update(TargetCompany)
+            .where(
+                TargetCompany.id == company_id,
+                or_(
+                    TargetCompany.run_status.is_(None),
+                    TargetCompany.run_status != "running",
+                    TargetCompany.run_started_at < now - RUN_STALE_AFTER,
+                ),
+            )
+            .values(run_status="running", run_started_at=now, run_finished_at=None)
+            .returning(TargetCompany.id)
+        ).first()
+        session.commit()
+    return claimed is not None
+
+
+def _finish_run(company_id: uuid.UUID, status: str) -> None:
+    with SessionLocal() as session:
+        session.execute(
+            update(TargetCompany)
+            .where(TargetCompany.id == company_id)
+            .values(run_status=status, run_finished_at=datetime.now(timezone.utc))
+        )
+        session.commit()
+
+
+def execute_claimed_run(company_id: uuid.UUID) -> dict:
+    """Runs the pipeline for a company already claimed via claim_run(), and records the
+    outcome (done / skipped / failed) where the frontend polls for it."""
+    try:
+        report = run_pipeline_for_target(company_id)
+    except Exception:
+        logger.exception("Pipeline run failed for target company %s", company_id)
+        _finish_run(company_id, "failed")
+        return {"target_company_id": str(company_id), "status": "failed"}
+    status = "skipped" if report is None else "done"
+    _finish_run(company_id, status)
+    return {
+        "target_company_id": str(company_id),
+        "status": status,
+        "report_id": str(report.id) if report else None,
+    }
+
+
+@app.post("/run/{target_company_id}", status_code=202)
 def trigger_run(target_company_id: str) -> dict:
-    report = run_pipeline_for_target(target_company_id)
-    return {"report_id": str(report.id), "pdf_url": report.pdf_url}
+    """Starts a run in the background and returns immediately. A full run (scraping,
+    Playwright, several LLM calls) takes minutes — far longer than the frontend's serverless
+    request limit — so the caller polls target_companies.run_status instead of waiting.
+
+    Requires the Cloud Run service to keep CPU allocated outside requests
+    (`--no-cpu-throttling`), otherwise the background thread is starved once this returns.
+    """
+    company_id = _parse_uuid(target_company_id, "Company")
+    with SessionLocal() as session:
+        if session.get(TargetCompany, company_id) is None:
+            raise HTTPException(status_code=404, detail="Company not found")
+    if not claim_run(company_id):
+        raise HTTPException(status_code=409, detail="A run is already in progress for this company")
+    threading.Thread(target=execute_claimed_run, args=(company_id,), daemon=True).start()
+    return {"status": "running"}
+
+
+def _latest_activity(session, company_id: uuid.UUID) -> datetime | None:
+    """The later of the company's latest report and its sources' latest successful check. A
+    run with no changes produces no report, so the report time alone would make a quiet
+    company look overdue every single day."""
+    latest_report_at = session.execute(
+        select(func.max(Report.created_at)).where(Report.target_company_id == company_id)
+    ).scalar_one_or_none()
+    latest_check_at = session.execute(
+        select(func.max(Source.last_checked_at))
+        .join(Source.competitor)
+        .where(Competitor.target_company_id == company_id)
+    ).scalar_one_or_none()
+    timestamps = [
+        t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in (latest_report_at, latest_check_at) if t
+    ]
+    return max(timestamps) if timestamps else None
+
+
+def _is_report_due(session, target_company: TargetCompany) -> bool:
+    """Due once report_interval_days have passed since the company was last checked, or
+    immediately if it never has been."""
+    latest = _latest_activity(session, target_company.id)
+    if latest is None:
+        return True
+    elapsed = datetime.now(timezone.utc) - latest
+    return elapsed >= timedelta(days=target_company.report_interval_days) - DUE_CHECK_GRACE
+
+
+def run_pipeline_for_all_active_companies() -> list[dict]:
+    """The scheduled pass: run every company whose interval has elapsed, most overdue first,
+    isolating failures so one company's errors don't block the rest. Called daily by Cloud
+    Scheduler (infra/scheduler_config.yaml); each company's own interval decides whether it
+    actually runs that day."""
+    started = time.monotonic()
+    with SessionLocal() as session:
+        companies = session.execute(select(TargetCompany)).scalars().all()
+        never = datetime.min.replace(tzinfo=timezone.utc)
+        due = sorted(
+            (c for c in companies if _is_report_due(session, c)),
+            key=lambda c: _latest_activity(session, c.id) or never,
+        )
+        due_ids = [c.id for c in due]
+
+    results = []
+    for company_id in due_ids:
+        if time.monotonic() - started > SCHEDULED_TIME_BUDGET_SECONDS:
+            logger.warning("Time budget reached; %d due companies deferred to the next pass",
+                           len(due_ids) - len(results))
+            break
+        if not claim_run(company_id):
+            results.append({"target_company_id": str(company_id), "status": "already_running"})
+            continue
+        results.append(execute_claimed_run(company_id))
+    return results
+
+
+def run_pipeline_for_target(
+    target_company_id: uuid.UUID | str,
+    week_start: date | None = None,
+    week_end: date | None = None,
+) -> Report | None:
+    """Collects every source of one company and, if anything new turned up, assembles a
+    report. Returns None (no report) when there's nothing new to report."""
+    company_id = uuid.UUID(str(target_company_id))
+    session = SessionLocal()
+    try:
+        target_company = session.get(TargetCompany, company_id)
+        if target_company is None:
+            raise ValueError(f"Target company {company_id} not found")
+
+        # The report period matches the company's own interval (not always 7 days).
+        week_end = week_end or date.today()
+        week_start = week_start or (week_end - timedelta(days=target_company.report_interval_days))
+        sources = session.execute(
+            select(Source).join(Source.competitor).where(Competitor.target_company_id == company_id)
+        ).scalars().all()
+
+        new_signal_count = 0
+        for source in sources:
+            try:
+                # A savepoint per source: if anything fails part-way (Groq rate limit, bad
+                # JSON, a scrape error), the new snapshot and content hash are rolled back
+                # with it. Previously they were committed anyway, so the next run saw an
+                # unchanged hash and that change was never reported.
+                with session.begin_nested():
+                    if _process_source(session, source) is not None:
+                        new_signal_count += 1
+                source.status = "active"
+            except Exception:
+                logger.exception("Source %s failed, marking broken and continuing", source.url)
+                source.status = "broken"
+        session.commit()
+
+        # Re-query this company's not-yet-reported signals rather than using this run's own:
+        # a signal is only "spent" once a persisted report includes it, so if an earlier
+        # run's report generation failed, its signals are picked up here.
+        reported_ids = {
+            sid
+            for ids in session.execute(
+                select(Report.signal_ids).where(Report.target_company_id == company_id)
+            ).scalars()
+            if ids
+            for sid in ids
+        }
+        report_signals = session.execute(
+            select(Signal)
+            .join(Signal.source)
+            .join(Source.competitor)
+            .where(Competitor.target_company_id == company_id, Signal.id.not_in(reported_ids))
+            .order_by(Signal.created_at)
+        ).scalars().all()
+
+        if not report_signals:
+            # Nothing new — skip the report rather than spend LLM calls on an empty one. The
+            # sources' last_checked_at (committed above) records the check, so the company
+            # isn't due again until a full interval has passed.
+            logger.info("No new signals for target %s, skipping report", company_id)
+            return None
+
+        try:
+            report = assemble_report(session, target_company, week_start, week_end, list(report_signals))
+            session.commit()
+            session.refresh(report)
+        except Exception:
+            # The signals are already committed above, so they're picked up again next run.
+            session.rollback()
+            logger.exception(
+                "Report generation failed for target %s (%d signals pending, recoverable on next run)",
+                company_id, len(report_signals),
+            )
+            raise
+
+        logger.info("Report %s generated with %d signals (%d new this run)",
+                    report.id, len(report_signals), new_signal_count)
+        return report
+    finally:
+        session.close()
+
+
+def _process_source(session, source: Source) -> Signal | None:
+    """Collect, detect, analyze, validate, and score one source. Returns the new signal, if any."""
+    collector = COLLECTOR_BY_SOURCE_TYPE[source.source_type](source.url)
+
+    collected = collector.collect(source.last_content_hash)
+    # Every successful fetch counts as a check, changed or not — _is_report_due() relies on it.
+    source.last_checked_at = datetime.now(timezone.utc)
+    if collected is None:
+        logger.info("No change for %s", source.url)
+        return None
+
+    latest_snapshot = session.execute(
+        select(Snapshot)
+        .where(Snapshot.source_id == source.id)
+        .order_by(Snapshot.fetched_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    content = collected.normalized_content
+    old_content = latest_snapshot.content if latest_snapshot else None
+    change = detect_change(old_content, content) if old_content is not None else None
+    if change is not None and not change.is_real:
+        # Only noise changed (whitespace, punctuation, a year). Remember the new hash so it
+        # isn't re-checked, but don't store a snapshot or bother the LLM.
+        logger.info("Noise-only change for %s (similarity %.4f)", source.url, change.similarity)
+        source.last_content_hash = collected.content_hash
+        return None
+
+    new_embedding = embed(content)
+    related_context = retrieve_related_context(session, source, new_embedding)
+
+    new_snapshot = Snapshot(
+        source_id=source.id, content=content, content_hash=collected.content_hash, embedding=new_embedding
+    )
+    session.add(new_snapshot)
+    session.flush()
+    source.last_content_hash = collected.content_hash
+
+    if change is None:
+        logger.info("First snapshot for %s, summarizing as a baseline", source.url)
+        analyst_output = summarize_baseline(source, content, related_context)
+    else:
+        logger.info("Candidate change for %s (similarity %.4f, %d regions)",
+                    source.url, change.similarity, len(change.regions))
+        analyst_output = analyze_change(source, old_content, content, related_context, change.regions)
+        if analyst_output.significance == "none":
+            # The snapshot is kept (it's the new "latest" to diff against), but no signal.
+            logger.info("Analyst rated the change insignificant for %s: %s", source.url, analyst_output.what_changed)
+            return None
+
+    validated = validate_signal(analyst_output, content, old_content)
+    signal = Signal(
+        source_id=source.id,
+        old_snapshot_id=latest_snapshot.id if latest_snapshot else None,
+        new_snapshot_id=new_snapshot.id,
+        similarity_score=change.similarity if change else None,
+        what_changed=analyst_output.what_changed,
+        why_it_matters=analyst_output.why_it_matters,
+        suggested_response=analyst_output.suggested_response,
+        priority=score_signal(source.source_type, analyst_output.significance),
+        validated=validated,
+        is_baseline=change is None,
+    )
+    session.add(signal)
+    session.flush()
+    if not validated:
+        logger.warning("Signal %s failed validation — kept but flagged, not silently dropped", signal.id)
+    return signal
+
+
+# --- Reports -------------------------------------------------------------------------------
+
+
+@app.get("/reports/{report_id}/pdf")
+def report_pdf(report_id: str) -> Response:
+    """Renders a report's PDF on demand. Same trust model as the other routes: the frontend's
+    /api/reports/[id]/pdf checks the caller can see this report (RLS) before calling here."""
+    with SessionLocal() as session:
+        report = session.get(Report, _parse_uuid(report_id, "Report"))
+        if report is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        pdf = render_report_pdf(session, report)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="founders-radar-report-{report_id}.pdf"'},
+    )
+
+
+# --- Discovery -----------------------------------------------------------------------------
 
 
 class DiscoverCompetitorsRequest(BaseModel):
-    company_name: str
-    website: str | None = None
-    description: str | None = None
+    company_name: str = Field(min_length=1, max_length=200)
+    website: str | None = Field(default=None, max_length=500)
+    description: str | None = Field(default=None, max_length=2000)
 
 
 class DiscoverSourcesRequest(BaseModel):
-    competitor_name: str
-    website: str | None = None
+    competitor_name: str = Field(min_length=1, max_length=200)
+    website: str | None = Field(default=None, max_length=500)
 
 
 @app.post("/discover/competitors")
 def discover_competitors(body: DiscoverCompetitorsRequest) -> dict:
     """Proposes candidate competitors — never written to the DB here. The frontend shows
     these for the user to review/edit/remove before anything is saved (docs/09-v2-plan.md)."""
-    candidates = find_competitors(body.company_name, body.website, body.description)
+    if not body.company_name.strip():
+        raise HTTPException(status_code=422, detail="company_name must not be blank")
+    candidates = find_competitors(body.company_name.strip(), body.website or None, body.description or None)
     return {"competitors": [c.__dict__ for c in candidates]}
 
 
 @app.post("/discover/sources")
 def discover_sources(body: DiscoverSourcesRequest) -> dict:
     """Proposes candidate source URLs for one competitor — same review-before-save flow."""
-    candidates = find_sources(body.competitor_name, body.website)
+    if not body.competitor_name.strip():
+        raise HTTPException(status_code=422, detail="competitor_name must not be blank")
+    candidates = find_sources(body.competitor_name.strip(), body.website or None)
     return {"sources": [c.__dict__ for c in candidates]}
 
 
+# --- Chat ----------------------------------------------------------------------------------
+
+
 class ChatRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=2000)
 
 
-# Per report/company, per hour. A generous cap for real usage, but a message here is a live
-# Groq call (unlike the weekly pipeline run's fixed cost) — this bounds runaway cost/abuse.
+# Per report/company, per hour. A message is a live Groq call, so this bounds cost and abuse.
 CHAT_RATE_LIMIT_PER_HOUR = 30
-# How many past messages to load from chat_messages for context — matches
-# backend/chat/qa.py's HISTORY_TURNS_KEPT (fetch exactly what will be used, no more).
+# Past messages loaded for context — matches backend/chat/qa.py's HISTORY_TURNS_KEPT.
 CHAT_HISTORY_ROWS = 6
+# How many of a company's most recent signals to always include for orientation-type
+# questions ("anything new this month?") that semantic search alone wouldn't surface well.
+COMPANY_CHAT_RECENT_SIGNALS = 8
+# Snapshots pulled via pgvector similarity search against the question — the RAG step that
+# answers specific factual questions ("what's Drata's current pricing?").
+COMPANY_CHAT_RELEVANT_SNAPSHOTS = 5
 
 
-def _check_chat_rate_limit(session, scope: str, subject_id: str) -> None:
+def _check_chat_rate_limit(session, scope: str, subject_id: uuid.UUID) -> None:
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     count = session.execute(
         select(func.count())
@@ -136,24 +457,38 @@ def _check_chat_rate_limit(session, scope: str, subject_id: str) -> None:
         )
 
 
-def _load_chat_history(session, scope: str, subject_id: str) -> list[ChatMessage]:
+def _load_chat_history(session, scope: str, subject_id: uuid.UUID) -> list[ChatMessage]:
     rows = session.execute(
         select(ChatMessageRow)
         .where(ChatMessageRow.scope == scope, ChatMessageRow.subject_id == subject_id)
         .order_by(ChatMessageRow.created_at.desc())
         .limit(CHAT_HISTORY_ROWS)
     ).scalars().all()
-    rows.reverse()
-    return [ChatMessage(role=r.role, content=r.content) for r in rows]
+    return [ChatMessage(role=r.role, content=r.content) for r in reversed(rows)]
+
+
+def _signal_context(s: Signal, include_content: bool) -> SignalContext:
+    return SignalContext(
+        competitor_name=s.source.competitor.name,
+        source_type=s.source.source_type,
+        source_url=s.source.url,
+        priority=s.priority,
+        is_baseline=s.is_baseline,
+        what_changed=s.what_changed,
+        why_it_matters=s.why_it_matters,
+        suggested_response=s.suggested_response,
+        old_content=s.old_snapshot.content if include_content and s.old_snapshot else None,
+        new_content=s.new_snapshot.content if include_content and s.new_snapshot else None,
+        created_at=None if include_content else str(s.created_at.date()),
+    )
 
 
 def _stream_chat_answer(
-    session, scope: str, subject_id: str, system_prompt: str, history: list[ChatMessage], question: str
+    session, scope: str, subject_id: uuid.UUID, system_prompt: str, history: list[ChatMessage], question: str
 ) -> StreamingResponse:
     """Streams the answer token-by-token, then persists it once generation finishes. The
     session stays open past this function's return — StreamingResponse pulls from `generate()`
-    lazily, after the route handler itself has already returned — so it's closed inside the
-    generator's own `finally`, not by the route."""
+    lazily, after the route handler has returned — so it's closed in the generator's `finally`."""
 
     def generate():
         chunks: list[str] = []
@@ -166,99 +501,66 @@ def _stream_chat_answer(
             if not chunks:
                 yield "Sorry, something went wrong answering that. Please try again."
         finally:
-            answer = "".join(chunks)
-            if answer:
-                session.add(ChatMessageRow(scope=scope, subject_id=subject_id, role="assistant", content=answer))
-                session.commit()
-            session.close()
+            try:
+                answer = "".join(chunks)
+                if answer:
+                    session.add(ChatMessageRow(scope=scope, subject_id=subject_id, role="assistant", content=answer))
+                    session.commit()
+            finally:
+                session.close()
 
     return StreamingResponse(generate(), media_type="text/plain")
 
 
 @app.post("/chat/report/{report_id}")
 def chat_about_report(report_id: str, body: ChatRequest) -> StreamingResponse:
-    """Report-scoped Q&A (Phase 1 — see docs/decisions.md). No auth here: the Next.js
-    /api/chat route already checked the caller can see this report (owner or shared/public,
-    via an RLS-scoped Supabase query) before ever calling this endpoint — same trust model
-    as /run and /discover/*."""
+    """Report-scoped Q&A. The frontend's /api/chat route has already checked the caller can
+    see this report (owner, invited, or public) before calling here."""
+    subject_id = _parse_uuid(report_id, "Report")
     session = SessionLocal()
     try:
-        report = session.get(Report, report_id)
+        report = session.get(Report, subject_id)
         if report is None:
             raise HTTPException(status_code=404, detail="Report not found")
 
-        _check_chat_rate_limit(session, "report", report_id)
-        history = _load_chat_history(session, "report", report_id)
+        _check_chat_rate_limit(session, "report", subject_id)
+        history = _load_chat_history(session, "report", subject_id)
 
-        signals = session.execute(
-            select(Signal).where(Signal.id.in_(report.signal_ids or []))
-        ).scalars().all()
-
-        signal_contexts = [
-            SignalContext(
-                competitor_name=s.source.competitor.name,
-                source_type=s.source.source_type,
-                source_url=s.source.url,
-                priority=s.priority,
-                is_baseline=s.is_baseline,
-                what_changed=s.what_changed,
-                why_it_matters=s.why_it_matters,
-                suggested_response=s.suggested_response,
-                old_content=s.old_snapshot.content if s.old_snapshot else None,
-                new_content=s.new_snapshot.content if s.new_snapshot else None,
-            )
-            for s in signals
-        ]
-
+        signals = session.execute(select(Signal).where(Signal.id.in_(report.signal_ids or []))).scalars().all()
         system_prompt = build_report_system_prompt(
             headline=report.headline,
             week_start=str(report.week_start),
             week_end=str(report.week_end),
             executive_summary=report.executive_summary,
-            signals=signal_contexts,
+            signals=[_signal_context(s, include_content=True) for s in signals],
         )
 
-        session.add(ChatMessageRow(scope="report", subject_id=report.id, role="user", content=body.question))
+        session.add(ChatMessageRow(scope="report", subject_id=subject_id, role="user", content=body.question))
         session.commit()
-
-        return _stream_chat_answer(session, "report", str(report.id), system_prompt, history, body.question)
+        return _stream_chat_answer(session, "report", subject_id, system_prompt, history, body.question)
     except Exception:
         session.close()
         raise
 
 
-# How many of a company's most recent signals (across all competitors) to always include for
-# orientation-type questions ("anything new this month?") that semantic search alone wouldn't
-# surface well, since they're not about one specific fact. Kept small to control prompt tokens.
-COMPANY_CHAT_RECENT_SIGNALS = 8
-# How many snapshots to pull via pgvector similarity search against the question's own
-# embedding — the actual RAG step that lets this scope answer specific factual questions a
-# fixed recent-signals list can't ("what's Drata's current pricing?").
-COMPANY_CHAT_RELEVANT_SNAPSHOTS = 5
-
-
 @app.post("/chat/company/{target_company_id}")
 def chat_about_company(target_company_id: str, body: ChatRequest) -> StreamingResponse:
-    """Company-wide Q&A (Phase 2 — see docs/decisions.md). Same trust model as
-    /chat/report/{report_id}: the Next.js /api/chat route already checked the caller owns this
-    company (target_companies RLS is owner-only, no sharing) before calling this endpoint."""
+    """Company-wide Q&A. The frontend's /api/chat route has already checked the caller owns
+    this company (target_companies RLS is owner-only) before calling here."""
+    subject_id = _parse_uuid(target_company_id, "Company")
     session = SessionLocal()
     try:
-        target_company = session.get(TargetCompany, target_company_id)
+        target_company = session.get(TargetCompany, subject_id)
         if target_company is None:
             raise HTTPException(status_code=404, detail="Company not found")
 
-        _check_chat_rate_limit(session, "company", target_company_id)
-        history = _load_chat_history(session, "company", target_company_id)
+        _check_chat_rate_limit(session, "company", subject_id)
+        history = _load_chat_history(session, "company", subject_id)
 
         competitors = session.execute(
-            select(Competitor).where(Competitor.target_company_id == target_company_id)
+            select(Competitor).where(Competitor.target_company_id == subject_id)
         ).scalars().all()
         competitor_ids = [c.id for c in competitors]
-
-        competitor_summaries = [
-            CompetitorSummary(name=c.name, website=c.website, is_self=c.is_self) for c in competitors
-        ]
 
         recent_signal_rows: list[Signal] = []
         relevant_snapshot_rows: list[Snapshot] = []
@@ -270,281 +572,34 @@ def chat_about_company(target_company_id: str, body: ChatRequest) -> StreamingRe
                 .order_by(Signal.created_at.desc())
                 .limit(COMPANY_CHAT_RECENT_SIGNALS)
             ).scalars().all()
-
-            question_embedding = embed(body.question)
             relevant_snapshot_rows = session.execute(
                 select(Snapshot)
                 .join(Snapshot.source)
-                .where(Source.competitor_id.in_(competitor_ids))
-                .order_by(Snapshot.embedding.cosine_distance(question_embedding))
+                .where(Source.competitor_id.in_(competitor_ids), Snapshot.embedding.is_not(None))
+                .order_by(Snapshot.embedding.cosine_distance(embed(body.question)))
                 .limit(COMPANY_CHAT_RELEVANT_SNAPSHOTS)
             ).scalars().all()
 
-        recent_signal_contexts = [
-            SignalContext(
-                competitor_name=s.source.competitor.name,
-                source_type=s.source.source_type,
-                source_url=s.source.url,
-                priority=s.priority,
-                is_baseline=s.is_baseline,
-                what_changed=s.what_changed,
-                why_it_matters=s.why_it_matters,
-                suggested_response=s.suggested_response,
-                old_content=None,  # snapshot bodies come via relevant_snapshots instead, to avoid duplicating content in the prompt
-                new_content=None,
-                created_at=str(s.created_at.date()),
-            )
-            for s in recent_signal_rows
-        ]
-        relevant_snapshot_contexts = [
-            SnapshotContext(
-                competitor_name=snap.source.competitor.name,
-                source_type=snap.source.source_type,
-                source_url=snap.source.url,
-                fetched_at=str(snap.fetched_at.date()),
-                content=snap.content,
-            )
-            for snap in relevant_snapshot_rows
-        ]
-
         system_prompt = build_company_system_prompt(
             company_name=target_company.name,
-            competitors=competitor_summaries,
-            recent_signals=recent_signal_contexts,
-            relevant_snapshots=relevant_snapshot_contexts,
+            competitors=[CompetitorSummary(name=c.name, website=c.website, is_self=c.is_self) for c in competitors],
+            # Snapshot bodies come via relevant_snapshots instead, to avoid duplicating content.
+            recent_signals=[_signal_context(s, include_content=False) for s in recent_signal_rows],
+            relevant_snapshots=[
+                SnapshotContext(
+                    competitor_name=snap.source.competitor.name,
+                    source_type=snap.source.source_type,
+                    source_url=snap.source.url,
+                    fetched_at=str(snap.fetched_at.date()),
+                    content=snap.content,
+                )
+                for snap in relevant_snapshot_rows
+            ],
         )
 
-        session.add(
-            ChatMessageRow(scope="company", subject_id=target_company.id, role="user", content=body.question)
-        )
+        session.add(ChatMessageRow(scope="company", subject_id=subject_id, role="user", content=body.question))
         session.commit()
-
-        return _stream_chat_answer(
-            session, "company", str(target_company.id), system_prompt, history, body.question
-        )
+        return _stream_chat_answer(session, "company", subject_id, system_prompt, history, body.question)
     except Exception:
         session.close()
         raise
-
-
-def _is_report_due(session, target_company: TargetCompany) -> bool:
-    """A company is due once report_interval_days have passed since its latest report
-    (or immediately, if it has never had one)."""
-    latest_report_at = session.execute(
-        select(Report.created_at)
-        .where(Report.target_company_id == target_company.id)
-        .order_by(Report.created_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-    if latest_report_at is None:
-        return True
-
-    if latest_report_at.tzinfo is None:
-        latest_report_at = latest_report_at.replace(tzinfo=timezone.utc)
-
-    return datetime.now(timezone.utc) - latest_report_at >= timedelta(days=target_company.report_interval_days)
-
-
-def run_pipeline_for_all_active_companies() -> list[dict]:
-    """Loop over every target company whose report_interval_days has elapsed since its last
-    report, isolating failures so one company's collectors or LLM errors don't block the rest.
-    Meant to be called on a frequent, fixed schedule (e.g. daily) — see infra/scheduler_config.yaml
-    — with each company's own interval deciding whether it actually runs today."""
-    session = SessionLocal()
-    try:
-        companies = session.execute(select(TargetCompany)).scalars().all()
-        due_ids = [c.id for c in companies if _is_report_due(session, c)]
-    finally:
-        session.close()
-
-    results = []
-    for company_id in due_ids:
-        try:
-            report = run_pipeline_for_target(str(company_id))
-            results.append({"target_company_id": str(company_id), "report_id": str(report.id)})
-        except Exception:
-            logger.exception("Pipeline run failed for target company %s", company_id)
-            results.append({"target_company_id": str(company_id), "error": "pipeline run failed"})
-    return results
-
-
-def run_pipeline_for_target(
-    target_company_id: str,
-    week_start: date | None = None,
-    week_end: date | None = None,
-):
-    session = SessionLocal()
-    try:
-        target_company = session.get(TargetCompany, target_company_id)
-
-        # Report period defaults to this company's own interval (not always 7 days) so a
-        # company checked every 2 days gets a 2-day report window, not a stale 7-day one.
-        week_end = week_end or date.today()
-        week_start = week_start or (week_end - timedelta(days=target_company.report_interval_days))
-        sources = session.execute(
-            select(Source).join(Source.competitor).where(
-                Source.competitor.has(target_company_id=target_company_id)
-            )
-        ).scalars().all()
-
-        new_signals: list[Signal] = []
-
-        for source in sources:
-            try:
-                new_signals.extend(_process_source(session, source))
-                source.status = "active"
-            except Exception:
-                # One source failing (blocked by robots.txt, exhausted retries, etc.)
-                # must not abort the rest of this company's sources or its report.
-                logger.exception("Source %s failed, marking broken and continuing", source.url)
-                source.status = "broken"
-
-        session.commit()
-
-        # Re-query for this company's not-yet-reported signals rather than using new_signals
-        # directly: a signal only counts as "spent" once it's actually included in a
-        # persisted report's signal_ids, so if a previous run's report generation failed
-        # after signals were already committed above (see docs/decisions.md's 2026-09-15 QA
-        # entry — that used to lose the whole report silently), this run picks up exactly
-        # what was lost alongside anything new, with no duplicate-signal risk.
-        reported_ids = {
-            sid
-            for ids in session.execute(
-                select(Report.signal_ids).where(Report.target_company_id == target_company_id)
-            ).scalars()
-            if ids
-            for sid in ids
-        }
-        report_signals = session.execute(
-            select(Signal).join(Signal.source).join(Source.competitor).where(
-                Source.competitor.has(target_company_id=target_company_id),
-                Signal.id.not_in(reported_ids),
-            )
-        ).scalars().all()
-
-        try:
-            report = assemble_report(session, target_company, week_start, week_end, report_signals)
-            cards = build_signal_cards(session, report_signals)
-
-            chart_paths = render_report_charts(report.chart_data, OUTPUT_DIR / str(report.id))
-            pdf_path = render_pdf(
-                report, target_company, cards, chart_paths, OUTPUT_DIR / str(report.id) / "report.pdf"
-            )
-            report.pdf_url = upload_report_pdf(pdf_path, report.id)
-            session.commit()
-            session.refresh(report)
-        except Exception:
-            # The signals themselves are already committed and safe (above) — only report
-            # generation (LLM summary, chart render, PDF render/upload) failed here. Roll
-            # back just the half-built Report row instead of leaving it partially set, and
-            # raise loudly instead of the previous silent failure. The frontend's own call to
-            # trigger a run is a deliberate fire-and-forget (see frontend/app/company/new/page.tsx),
-            # so this won't reach the user directly yet — but every pending signal is now
-            # recoverable by the query above on the very next run, instead of lost for good.
-            session.rollback()
-            logger.exception(
-                "Report generation failed for target %s (%d signals pending, recoverable on next run)",
-                target_company_id, len(report_signals),
-            )
-            raise
-
-        logger.info(
-            "Report %s generated with %d signals (%d new this run) -> %s",
-            report.id, len(report_signals), len(new_signals), pdf_path,
-        )
-        return report
-    finally:
-        session.close()
-
-
-def _process_source(session, source: Source) -> list[Signal]:
-    """Collect, detect, analyze, validate, and score a single source. Returns new signals."""
-    collector_cls = COLLECTOR_BY_SOURCE_TYPE[source.source_type]
-    collector = collector_cls(source.url)
-
-    collected = collector.collect(source.last_content_hash)
-    if collected is None:
-        logger.info("No hash change for %s", source.url)
-        return []
-
-    latest_snapshot = session.execute(
-        select(Snapshot)
-        .where(Snapshot.source_id == source.id)
-        .order_by(Snapshot.fetched_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-    new_embedding = embed(collected.normalized_content)
-    new_snapshot = Snapshot(
-        source_id=source.id,
-        content=collected.normalized_content,
-        content_hash=collected.content_hash,
-        embedding=new_embedding,
-    )
-    session.add(new_snapshot)
-    session.flush()
-
-    source.last_content_hash = collected.content_hash
-    source.last_checked_at = new_snapshot.fetched_at
-
-    if latest_snapshot is None:
-        logger.info("First snapshot for %s, summarizing as a baseline finding", source.url)
-        related_context = retrieve_related_context(session, source, new_embedding)
-        analyst_output = summarize_baseline(source, collected.normalized_content, related_context)
-
-        validated = validate_signal(analyst_output, collected.normalized_content)
-        priority = score_signal(source.source_type)
-
-        signal = Signal(
-            source_id=source.id,
-            old_snapshot_id=None,
-            new_snapshot_id=new_snapshot.id,
-            similarity_score=None,
-            what_changed=analyst_output.what_changed,
-            why_it_matters=analyst_output.why_it_matters,
-            suggested_response=analyst_output.suggested_response,
-            priority=priority,
-            validated=validated,
-            is_baseline=True,
-        )
-        session.add(signal)
-        session.flush()
-
-        if not validated:
-            logger.warning("Baseline signal %s failed validation — kept but flagged", signal.id)
-
-        return [signal]
-
-    is_real, similarity = is_real_change(latest_snapshot.content, collected.normalized_content)
-    logger.info("Similarity for %s: %.4f (real_change=%s)", source.url, similarity, is_real)
-
-    if not is_real:
-        return []
-
-    related_context = retrieve_related_context(session, source, new_embedding)
-    analyst_output = analyze_change(
-        source, latest_snapshot.content, collected.normalized_content, related_context
-    )
-
-    validated = validate_signal(analyst_output, collected.normalized_content)
-    priority = score_signal(source.source_type)
-
-    signal = Signal(
-        source_id=source.id,
-        old_snapshot_id=latest_snapshot.id,
-        new_snapshot_id=new_snapshot.id,
-        similarity_score=similarity,
-        what_changed=analyst_output.what_changed,
-        why_it_matters=analyst_output.why_it_matters,
-        suggested_response=analyst_output.suggested_response,
-        priority=priority,
-        validated=validated,
-    )
-    session.add(signal)
-    session.flush()
-
-    if not validated:
-        logger.warning("Signal %s failed validation — kept but flagged, not silently dropped", signal.id)
-
-    return [signal]

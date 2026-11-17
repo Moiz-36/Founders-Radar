@@ -1,20 +1,13 @@
-"""Assembles a week's scored signals into a Report record (section 4.5)."""
+"""Assembles a reporting period's scored signals into a Report record."""
 
-import json
-import os
 from dataclasses import dataclass
 from datetime import date
 
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from backend.db.models import Competitor, Report, Signal, Source, TargetCompany
+from backend.llm import complete_json
 from backend.report.diff_util import render_diff_html
-
-# Groq's API is OpenAI-compatible — see backend/analysis/analyst.py.
-MODEL = "openai/gpt-oss-120b"
-
-_client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
 
 SUMMARY_SYSTEM_PROMPT = """You are a market intelligence analyst writing the \
 executive summary for a periodic competitor report (the reporting period varies \
@@ -43,7 +36,7 @@ class SignalCard:
     diff_truncated: bool
 
 
-def build_signal_cards(session: Session, signals: list[Signal]) -> list[SignalCard]:
+def build_signal_cards(signals: list[Signal]) -> list[SignalCard]:
     cards = []
     for signal in signals:
         source: Source = signal.source
@@ -83,18 +76,8 @@ def generate_headline_and_summary(cards: list[SignalCard]) -> tuple[str, str]:
         f"{c.competitor_name} ({c.source_type}): {c.what_changed}"
         for c in cards
     )
-    response = _client.chat.completions.create(
-        model=MODEL,
-        max_tokens=1024,
-        response_format={"type": "json_object"},
-        extra_body={"reasoning_effort": "low"},
-        messages=[
-            {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-            {"role": "user", "content": signals_block or "(no signals this period)"},
-        ],
-    )
-    parsed = json.loads(response.choices[0].message.content)
-    return parsed["headline"], parsed["executive_summary"]
+    parsed = complete_json(SUMMARY_SYSTEM_PROMPT, signals_block or "(no signals this period)", max_tokens=1024)
+    return str(parsed["headline"]), str(parsed["executive_summary"])
 
 
 def build_chart_data(cards: list[SignalCard]) -> dict:
@@ -118,7 +101,7 @@ def assemble_report(
     week_end: date,
     signals: list[Signal],
 ) -> Report:
-    cards = build_signal_cards(session, signals)
+    cards = build_signal_cards(signals)
     headline, executive_summary = generate_headline_and_summary(cards)
     chart_data = build_chart_data(cards)
 

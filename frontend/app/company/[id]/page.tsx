@@ -142,7 +142,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <RunNowButton companyId={company.id} />
+            <RunNowButton companyId={company.id} initialStatus={company.run_status} initialStartedAt={company.run_started_at} />
             <DeleteCompanyButton
               companyId={company.id}
               companyName={company.name}

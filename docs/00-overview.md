@@ -19,7 +19,7 @@ How Founder's Radar gets built, broken into one doc per feature/component. Each 
 
 Schema applied, `.env` filled in, ComplyDo + Vanta + Drata seeded, all 7 collectors verified against real sites, and a **full real pipeline run completed end-to-end** for the first time (7 baseline snapshots stored, real Groq-generated summary, real PDF rendered) — see [decisions.md](./decisions.md), 2026-09-03 entries. What's left:
 1. A **second** real run is needed to actually see a signal detected — the first run only established baseline snapshots (nothing to diff against yet). Either wait for real content to change, or hand-edit a stored snapshot to simulate a change, to exercise detect→analyze→score end-to-end.
-2. Re-tune the change-detection similarity threshold (currently 0.98, calibrated on 2 synthetic examples) once real snapshot pairs exist.
+2. ~~Re-tune the change-detection similarity threshold~~ — superseded 2026-11-17: detection is no longer embedding-threshold based (see [03-change-detection.md](./03-change-detection.md)).
 3. Decide a real scheduling cadence and wire up `infra/` (currently scaffolded, not deployed) so this runs weekly on its own instead of by hand.
 
 ## Repo layout

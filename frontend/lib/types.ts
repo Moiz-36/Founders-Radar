@@ -12,7 +12,6 @@ export interface Report {
     volume_by_competitor: Record<string, number>;
     category_breakdown: Record<string, number>;
   } | null;
-  pdf_url: string | null;
   visibility: ReportVisibility;
   created_at: string;
 }
@@ -29,8 +28,14 @@ export interface TargetCompany {
   owner_id: string | null;
   name: string;
   report_interval_days: number;
+  // Latest pipeline run (backend/main.py's claim_run); null = never run.
+  run_status: RunStatus | null;
+  run_started_at: string | null;
+  run_finished_at: string | null;
   created_at: string;
 }
+
+export type RunStatus = "running" | "done" | "skipped" | "failed";
 
 export interface Competitor {
   id: string;

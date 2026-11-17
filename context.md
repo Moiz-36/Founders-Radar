@@ -49,16 +49,18 @@ It's a solo-built portfolio project, not a company — no funding, no team. It s
 ## 4. Pipeline architecture
 
 ```
-Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG + LLM) → Scorer → Report Assembler → PDF/Web Renderer
+Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG + LLM) → Validator → Scorer → Report (web, PDF on demand)
 ```
 
 1. **Discovery** (`backend/discovery/`) — per tracked company, proposes competitors and their source URLs; human reviews/edits before anything saves.
-2. **Collectors** (`backend/collectors/`) — one per source type (pricing, feature, job_posting, news, community, review, general), each hashes fetched content and only passes it downstream if the hash changed.
-3. **Change detector** (`backend/detection/`) — embeds old vs. new content, flags a real change only when cosine similarity drops below a tuned threshold. Precision-tested against a hand-labeled eval set in `/eval`.
-4. **Analyst** (`backend/analysis/analyst.py`) — retrieves related historical context via pgvector similarity search, prompts the LLM for `{what_changed, why_it_matters, suggested_response}`.
-5. **Validator** (`backend/analysis/validator.py`) — checks the analyst's claim against the actual diffed content before trusting it; flagged failures are logged, not silently dropped.
-6. **Scorer** (`backend/scoring/scorer.py`) — assigns High/Medium/Low priority via a small, explicit rubric.
-7. **Report assembler + renderer** (`backend/report/`) — turns the period's scored signals into a designed PDF and web report; owner controls visibility (private/invited/public) once live.
+2. **Collectors** (`backend/collectors/`) — one per source type (pricing, feature, job_posting, news, community, review, general), built on three shared fetch strategies in `base.py` (static page, Playwright-rendered page, HN search). Each hashes fetched content and only passes it downstream if the hash changed.
+3. **Change detector** (`backend/detection/`) — a noise-aware word diff (ignores whitespace, punctuation, filler words, years); noise-only changes stop here, anything else goes to the analyst with its changed regions. Measured against a hand-labeled eval set in `/eval`. Not embedding-based any more — see `docs/03-change-detection.md` for why.
+4. **Analyst** (`backend/analysis/analyst.py`) — retrieves related historical context via pgvector similarity search, prompts the LLM for `{what_changed, why_it_matters, suggested_response, significance}`; `significance: none` drops the change. All LLM calls go through `backend/llm.py`.
+5. **Validator** (`backend/analysis/validator.py`) — deterministic grounding check (the claim's numbers and most key words must appear in the content); flagged failures are logged, not silently dropped.
+6. **Scorer** (`backend/scoring/scorer.py`) — High/Medium/Low from a per-source-type base, moved one level by the analyst's significance.
+7. **Report assembler** (`backend/report/`) — turns the period's new signals into a web report (none if nothing is new); the PDF is rendered on demand (`GET /reports/{id}/pdf`). Owner controls visibility (private/invited/public).
+
+**Runs**: "Run report now" claims the company (`target_companies.run_status`), runs in a background thread and returns 202; the frontend polls `run_status`. Each source is processed in its own DB savepoint, so a failure part-way (e.g. an LLM error) rolls that source back and the change is retried next run. The daily scheduled pass runs due companies most-overdue-first within a time budget.
 8. **Chat** (`backend/chat/qa.py`) — a Q&A assistant scoped to one report's signals, or (via pgvector search) a whole company's history.
 
 For the actual current database schema, read `infra/sql/schema.sql` directly rather than trusting a copy here — it's the single source of truth and changes often enough that a duplicate would drift.
@@ -78,10 +80,12 @@ founders-radar/
 │   ├── analysis/           # analyst.py, validator.py
 │   ├── scoring/
 │   ├── chat/                # qa.py — founder Q&A assistant
-│   ├── report/              # assembler.py, charts.py, pdf_renderer.py, diff_util.py, storage.py
+│   ├── report/              # assembler.py, charts.py, pdf_renderer.py, diff_util.py
 │   ├── db/                  # models.py, session.py, seed.py
+│   ├── llm.py                # the shared Groq client
 │   └── main.py               # FastAPI app entrypoint / pipeline orchestration
 ├── eval/                    # labeled change-detection eval set + precision runner
+├── tests/                   # pytest suite (see section 8)
 ├── frontend/                 # Next.js app — auth, dashboard, company management, custom
 │                              # widget dashboard, report viewer/sharing, marketing site
 ├── infra/
@@ -98,9 +102,6 @@ founders-radar/
 
 ```
 DATABASE_URL=             # Supabase Postgres connection string (postgresql+psycopg:// scheme)
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=  # backend-only, uploads PDFs to Storage, bypasses RLS
 GROQ_API_KEY=              # analyst, discovery, chat, exec-summary synthesis
 TAVILY_API_KEY=            # discovery web search
 GCP_PROJECT_ID=
@@ -118,3 +119,9 @@ No OpenAI or Anthropic key needed anywhere — embeddings run locally, LLM calls
 - Log every pipeline run's key decisions (what was flagged as a change, what the similarity score was, what got filtered as noise).
 - Commit in logical, readable chunks — this repo is public.
 - When something non-obvious gets decided or a real bug gets found and fixed, write it up in `docs/decisions.md` rather than only in a commit message — that file is what lets a fresh read of the project (human or AI) understand *why*, not just *what*.
+
+---
+
+## 8. Tests
+
+`python -m pytest` (install `requirements-dev.txt` first). The suite starts its own local Postgres + pgvector via `pgserver`, applies the real `infra/sql/schema.sql` on top of small stand-ins for Supabase's `auth`/`storage` schemas, and blocks every outbound network connection — so it can never touch the live database, Groq, Tavily or a real site. Scraping and LLM calls are faked (`tests/conftest.py`); embeddings run for real. RLS policies are tested as the real `authenticated`/`anon` roles in `tests/test_rls.py`. Frontend: `npx tsc --noEmit` and `npx next build` in `frontend/`.

@@ -1,4 +1,4 @@
-"""Auto-discovers the pricing/feature/jobs source URLs for one competitor.
+"""Auto-discovers the pricing/feature/jobs/review source URLs for one competitor.
 
 Same human-in-the-loop philosophy as competitor_finder.py — these are candidates for the
 user to review/edit/remove, never written to the database directly. A type with no
@@ -7,22 +7,14 @@ sometimes has no job_posting source at all, e.g. Drata's Cloudflare-blocked care
 that's a real, expected outcome, not a bug to work around here).
 """
 
-import json
-import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from openai import OpenAI
-
 from backend.discovery.search import web_search
-
-MODEL = "openai/gpt-oss-120b"
-
-_client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
+from backend.llm import complete_json
 
 # One search query per scraped source type. "news" and "community" are intentionally
-# excluded — per the existing collector convention (backend/collectors/news_collector.py and
-# community_collector.py), their `url` is actually a search term, not a page to search for.
+# excluded — their `url` is a search term (the competitor's name), not a page to search for.
 SEARCH_QUERIES = {
     "pricing": "{name} pricing",
     "feature": "{name} changelog OR blog OR \"what's new\" OR release notes",
@@ -34,15 +26,9 @@ SEARCH_QUERIES = {
 # e.g. "Coda pricing" gets dominated by third-party review/aggregator sites (vendr.com,
 # roundup blogs) that rank above coda.io/pricing itself (confirmed by hand testing this).
 # job_posting is deliberately NOT restricted: it legitimately often lives on an external ATS
-# domain (Greenhouse, Lever, Ashby) rather than the company's own site. review is deliberately
-# NOT restricted either — a review source is, by definition, a third-party site (G2/Capterra/
-# Trustpilot), never the competitor's own domain.
+# domain (Greenhouse, Lever, Ashby). review is NOT restricted either — a review source is by
+# definition a third-party site (G2/Capterra/Trustpilot).
 RESTRICT_TO_OWN_DOMAIN = {"pricing", "feature"}
-
-
-def _domain_of(website: str) -> str | None:
-    netloc = urlparse(website if "://" in website else f"https://{website}").netloc
-    return netloc.removeprefix("www.") or None
 
 SYSTEM_PROMPT = """You are a market research analyst finding specific pages on a \
 competitor's website. For each source type below, you're given web search results — pick \
@@ -68,9 +54,21 @@ class SourceCandidate:
     url: str
 
 
+def _domain_of(website: str) -> str | None:
+    netloc = urlparse(website if "://" in website else f"https://{website}").netloc
+    return netloc.removeprefix("www.") or None
+
+
+def _is_http_url(value: object) -> bool:
+    """The LLM occasionally returns "null" as a string, a bare domain, or prose."""
+    if not isinstance(value, str):
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
 def find_sources(competitor_name: str, website: str | None = None) -> list[SourceCandidate]:
     context_line = f"Competitor: {competitor_name}" + (f" ({website})" if website else "")
-
     domain = _domain_of(website) if website else None
 
     results_blocks = []
@@ -81,30 +79,17 @@ def find_sources(competitor_name: str, website: str | None = None) -> list[Sourc
         results_text = "\n".join(f"  - {r.title} ({r.url}): {r.description}" for r in results) or "  (no results)"
         results_blocks.append(f"{source_type.upper()} search results:\n{results_text}")
 
-    response = _client.chat.completions.create(
-        model=MODEL,
-        max_tokens=1024,
-        response_format={"type": "json_object"},
-        extra_body={"reasoning_effort": "low"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"{context_line}\n\n" + "\n\n".join(results_blocks)},
-        ],
-    )
-
-    parsed = json.loads(response.choices[0].message.content)
+    parsed = complete_json(SYSTEM_PROMPT, f"{context_line}\n\n" + "\n\n".join(results_blocks), max_tokens=1024)
     candidates = [
         SourceCandidate(source_type=source_type, url=parsed[source_type])
         for source_type in SEARCH_QUERIES
-        if parsed.get(source_type)
+        if _is_http_url(parsed.get(source_type))
     ]
-    # News and community are deterministic, not search+LLM-derived — see module docstring.
+    # News and community are deterministic, not search+LLM-derived — see SEARCH_QUERIES above.
     candidates.append(SourceCandidate(source_type="news", url=competitor_name))
     candidates.append(SourceCandidate(source_type="community", url=competitor_name))
-    # "general" (the catch-all "everything about this business" source, user request
-    # 2026-09-14) is also deterministic: the competitor's own homepage is the one URL that's
-    # already the broadest possible page, so there's nothing for a search+LLM pick to add.
-    # Omitted (like job_posting sometimes is) when no website is known.
+    # "general" (the catch-all source) is also deterministic: the competitor's own homepage is
+    # already the broadest possible page. Omitted when no website is known.
     if website:
         candidates.append(SourceCandidate(source_type="general", url=website))
     return candidates

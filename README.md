@@ -13,16 +13,16 @@ After that first version worked end-to-end against real data, it was rebuilt int
 ## How it works
 
 ```
-Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG + LLM) → Scorer → Report Assembler → PDF/Web Renderer
+Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG + LLM) → Validator → Scorer → Report (web, PDF on demand)
 ```
 
 1. **Discovery** (per tracked company): an LLM + Tavily web search propose competitors and their pricing/feature/jobs/review/news/community source URLs; the user reviews and edits before anything is saved — never fully autonomous.
 2. **Collectors** fetch each competitor's pricing page, feature/changelog page, job board, review-site profile (G2/Capterra/Trustpilot), recent press mentions, and community buying-intent chatter (HN — "alternative to X", "switching from X"), hashing content to detect any change at all.
-3. **Change detector** embeds old vs. new content and flags a *real* change only when cosine similarity drops below a tuned threshold — plain text diffing is too noisy (a reworded sentence isn't a signal). Tuned and precision-tested against a hand-labeled eval set in [`/eval`](./eval).
-4. **Analyst** retrieves related historical context via pgvector similarity search and prompts an LLM to explain what changed and why it matters to a competing founder.
-5. **Validator** checks the analyst's claim against the actual diffed content before it's trusted, to catch hallucination — flagged failures are logged, not silently dropped.
-6. **Scorer** assigns High/Medium/Low priority via a small, explicit rubric (`backend/scoring/scorer.py`) rather than logic buried deep in the pipeline.
-7. **Report assembler + renderer** turns the period's scored signals into a designed PDF and web report — headline, executive summary, signal cards (each with a raw old-vs-new diff alongside the LLM summary), charts, source appendix. The report's owner controls who can see it (private, invited by email, or public) once it's live.
+3. **Change detector** runs a noise-aware word diff (ignoring whitespace, punctuation, filler words, copyright years) so cosmetic edits never reach the LLM, and hands the changed regions to the analyst. Measured against a hand-labeled eval set in [`/eval`](./eval). (It used to compare embeddings — that silently missed every change past the first ~200 words of a page; see `docs/03-change-detection.md`.)
+4. **Analyst** retrieves related historical context via pgvector similarity search and prompts an LLM to explain what changed, why it matters to a competing founder, and how significant it is — insignificant changes are dropped.
+5. **Validator** checks the analyst's claim is grounded in the actual content (every number must appear there, and most key words) to catch hallucination — flagged failures are logged, not silently dropped.
+6. **Scorer** assigns High/Medium/Low priority from a small, explicit rubric (`backend/scoring/scorer.py`): a base level per source type, adjusted by the analyst's significance rating.
+7. **Report assembler** turns the period's new signals into a web report — headline, executive summary, signal cards (each with a raw old-vs-new diff alongside the LLM summary), charts — with a designed PDF rendered on demand. A run with nothing new makes no report. The report's owner controls who can see it (private, invited by email, or public).
 
 Runs per company on that company's own configurable interval (Cloud Scheduler → Cloud Run), not one shared weekly cron.
 
@@ -37,6 +37,7 @@ The pipeline (discovery/scraping/detection/analysis/rendering) is fully decouple
 ```
 backend/        # Python backend — discovery, collectors, detection, analysis, scoring, report assembly/rendering
 eval/           # labeled change-detection eval set + precision runner
+tests/          # pytest suite — pipeline, API, and RLS policies against a throwaway local Postgres
 frontend/       # Next.js app — auth, dashboard, company management, custom widget dashboard, report viewer/sharing
 infra/          # Cloud Run + Cloud Scheduler config, Dockerfile, SQL schema
 ```
@@ -48,7 +49,7 @@ infra/          # Cloud Run + Cloud Scheduler config, Dockerfile, SQL schema
 py -3.12 -m venv .venv
 ./.venv/Scripts/pip install -r backend/requirements.txt
 ./.venv/Scripts/python -m playwright install chromium
-cp .env.example .env   # fill in DATABASE_URL, GROQ_API_KEY, TAVILY_API_KEY, SUPABASE_*
+cp .env.example .env   # fill in DATABASE_URL, GROQ_API_KEY, TAVILY_API_KEY
 ./.venv/Scripts/uvicorn backend.main:app --reload
 
 # Database — schema.sql is cumulative/append-only, safe to run once against a fresh
@@ -57,6 +58,11 @@ psql "$DATABASE_URL" -f infra/sql/schema.sql
 
 # Eval
 ./.venv/Scripts/python -m eval.run_eval
+
+# Tests — start their own local Postgres + pgvector (pgserver, no Docker), never touch the
+# real database, and block all outbound network calls
+./.venv/Scripts/pip install -r requirements-dev.txt
+./.venv/Scripts/python -m pytest
 
 # Frontend
 cd frontend
@@ -72,7 +78,7 @@ No OpenAI account needed — embeddings run locally via `sentence-transformers` 
 Fully live: frontend on Vercel, backend split across two GCP Cloud Run services — a public one (`founders-radar-api`) serving discovery/chat/on-demand runs for the frontend, and a private one on a daily Cloud Scheduler trigger for per-company scheduled reports. Both the original pipeline and the v2 multi-tenant product have been verified against real data and real accounts, not synthetic fixtures — see `docs/decisions.md` for the full dated trail, including every real bug found along the way (scraping edge cases, a Cloudflare-protected page, a Supabase RLS gap that made reports/signals world-readable, and — caught only once the interactive backend was actually deployed publicly for the first time — two production secrets with a corrupting trailing newline).
 
 Open items:
-- Populate `/eval` with more real labeled examples — the change-detection similarity threshold is still calibrated on a small hand-labeled set (see `docs/decisions.md`).
+- Grow `/eval` with real labeled snapshot pairs as they accumulate (it's currently 13 hand-written examples).
 - Email notifications on new reports (Phase 3 of the v2 plan) — provider not yet chosen.
 
 See [`docs/09-v2-plan.md`](./docs/09-v2-plan.md) for the current plan/status and [`docs/decisions.md`](./docs/decisions.md) for every non-obvious choice made along the way. [`docs/00-overview.md`](./docs/00-overview.md) still describes the original v1 pipeline build plan, which v2 builds on top of rather than replaces.

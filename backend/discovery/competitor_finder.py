@@ -11,25 +11,20 @@ work out what the company actually does — from the user's description and/or i
 homepage — and search by that product category instead.
 """
 
-import json
-import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from openai import OpenAI
 
-from backend.collectors.base import USER_AGENT
+from backend.collectors.base import USER_AGENT, render_with_playwright
 from backend.discovery.search import SearchResult, web_search
+from backend.llm import complete_json
 
-# Groq's API is OpenAI-compatible — see backend/analysis/analyst.py.
-MODEL = "openai/gpt-oss-120b"
 HOMEPAGE_CHAR_LIMIT = 4000
 # Free hosts like Render can take ~50s to wake a sleeping app.
 HOMEPAGE_TIMEOUT_MS = 60_000
-
-_client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
+MAX_COMPETITORS = 5
 
 PROFILE_PROMPT = """You are a market research analyst. From the information given about a \
 company, work out what it sells and to whom.
@@ -70,6 +65,8 @@ class CompetitorCandidate:
 
 
 def _page_text(html: str) -> str:
+    """Title + meta description + visible text — the meta description is often the single
+    best one-line summary of what a company does, so it's kept even though collectors drop it."""
     soup = BeautifulSoup(html, "html.parser")
     meta = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
     title = soup.title.get_text(strip=True) if soup.title else ""
@@ -92,15 +89,7 @@ def _fetch_homepage_text(website: str) -> str:
         pass
 
     try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
-            page = browser.new_page()
-            page.goto(website, timeout=HOMEPAGE_TIMEOUT_MS, wait_until="networkidle")
-            html = page.content()
-            browser.close()
-        return _page_text(html)
+        return _page_text(render_with_playwright(website, timeout_ms=HOMEPAGE_TIMEOUT_MS))
     except Exception:
         return ""
 
@@ -118,14 +107,12 @@ def _profile_company(company_name: str, website: str | None, description: str | 
     if homepage:
         info += f"Homepage text:\n{homepage}\n"
 
-    response = _client.chat.completions.create(
-        model=MODEL,
-        max_tokens=1024,
-        response_format={"type": "json_object"},
-        extra_body={"reasoning_effort": "low"},
-        messages=[{"role": "system", "content": PROFILE_PROMPT}, {"role": "user", "content": info}],
-    )
-    profile = json.loads(response.choices[0].message.content)
+    try:
+        profile = complete_json(PROFILE_PROMPT, info, max_tokens=1024)
+    except Exception:
+        # Profiling only sharpens the search queries — fall back to name-only discovery
+        # rather than failing the whole request.
+        profile = {}
     if description and not profile.get("description"):
         profile["description"] = description
     return profile
@@ -144,7 +131,8 @@ def find_competitors(
     known_description = profile.get("description") or description or ""
     category = profile.get("category") or ""
 
-    queries = [q for q in profile.get("search_queries", []) if q][:2]
+    search_queries = profile.get("search_queries")
+    queries = [q for q in search_queries if isinstance(q, str) and q][:2] if isinstance(search_queries, list) else []
     if category:
         queries.append(f"best {category} alternatives")
     queries.append(f"{company_name} competitors alternatives")
@@ -166,24 +154,24 @@ def find_competitors(
     if category:
         context += f"\nProduct category: {category}"
 
-    response = _client.chat.completions.create(
-        model=MODEL,
-        max_tokens=1024,
-        response_format={"type": "json_object"},
-        extra_body={"reasoning_effort": "low"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"{context}\n\nSearch results:\n{results_block}"},
-        ],
-    )
+    parsed = complete_json(SYSTEM_PROMPT, f"{context}\n\nSearch results:\n{results_block}", max_tokens=1024)
 
-    parsed = json.loads(response.choices[0].message.content)
-    return [
-        CompetitorCandidate(
-            name=c["name"],
-            website=c.get("website"),
-            confidence=c.get("confidence", "low"),
+    candidates: list[CompetitorCandidate] = []
+    seen_names: set[str] = set()
+    for c in parsed.get("competitors", []):
+        name = str(c.get("name") or "").strip() if isinstance(c, dict) else ""
+        # Drop blanks, duplicates, and the company itself (the LLM sometimes lists it).
+        if not name or name.lower() in seen_names or name.lower() == company_name.strip().lower():
+            continue
+        if own_domain and _domain(c.get("website")) == own_domain:
+            continue
+        seen_names.add(name.lower())
+        confidence = c.get("confidence")
+        candidates.append(
+            CompetitorCandidate(
+                name=name,
+                website=c.get("website") or None,
+                confidence=confidence if confidence in ("high", "medium", "low") else "low",
+            )
         )
-        for c in parsed.get("competitors", [])
-        if _domain(c.get("website")) != own_domain or not own_domain
-    ]
+    return candidates[:MAX_COMPETITORS]

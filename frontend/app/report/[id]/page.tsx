@@ -130,8 +130,14 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
         {isOwner && <ShareReportPanel reportId={report.id} initialVisibility={report.visibility} initialShares={shares} />}
 
         <h1 className="font-heading text-2xl font-semibold text-ink dark:text-ink-dark">{report.headline}</h1>
-        <div className="mt-1 text-sm text-ink-muted dark:text-ink-muted-dark">
-          {report.week_start} to {report.week_end}
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 text-sm text-ink-muted dark:text-ink-muted-dark">
+          <span>
+            {report.week_start} to {report.week_end}
+          </span>
+          {/* Plain <a>, not <Link>: it's a file download from an API route, not a page. */}
+          <a href={`/api/reports/${report.id}/pdf`} className="font-medium text-brand hover:underline">
+            Download PDF
+          </a>
         </div>
 
         <div className="mt-4 rounded-lg border-l-4 border-brand bg-canvas p-4 leading-relaxed text-ink shadow-[0_1px_2px_0_rgba(60,64,67,0.08)] dark:bg-surface-dark dark:text-ink-dark">

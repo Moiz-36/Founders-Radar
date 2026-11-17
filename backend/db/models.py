@@ -1,7 +1,7 @@
-"""SQLAlchemy models matching the schema defined in context.md (section 5)."""
+"""SQLAlchemy models matching infra/sql/schema.sql (the authoritative schema)."""
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ARRAY, DateTime, Float, ForeignKey, Integer, String, Text
@@ -9,6 +9,11 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 384  # matches local sentence-transformers all-MiniLM-L6-v2 (see detection/change_detector.py)
+
+
+def _utcnow() -> datetime:
+    # Timezone-aware, unlike the deprecated naive UTC helper, to match the TIMESTAMPTZ columns.
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -28,7 +33,13 @@ class TargetCompany(Base):
     # A company is "due" for a new report once this many days have passed since its latest
     # report — see _is_report_due() in backend/main.py.
     report_interval_days: Mapped[int] = mapped_column(Integer, default=7)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    # Latest pipeline run: running | done | skipped (nothing new) | failed. NULL = never run.
+    # Set by claim_run()/execute_claimed_run() in backend/main.py; the frontend polls it after
+    # "Run report now", since a run takes minutes and returns before finishing.
+    run_status: Mapped[str | None] = mapped_column(String)
+    run_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     competitors: Mapped[list["Competitor"]] = relationship(back_populates="target_company")
     reports: Mapped[list["Report"]] = relationship(back_populates="target_company")
@@ -56,14 +67,15 @@ class Source(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     competitor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("competitors.id"))
-    source_type: Mapped[str] = mapped_column(String)  # pricing | feature | job_posting | news | community
+    # pricing | feature | job_posting | news | community | review | general — see backend/collectors
+    source_type: Mapped[str] = mapped_column(String)
     url: Mapped[str] = mapped_column(String, nullable=False)
     last_content_hash: Mapped[str | None] = mapped_column(String)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # active: last collect() succeeded (or hasn't run yet). broken: last collect() raised
-    # (robots.txt disallow, exhausted retries, etc.) — surfaced in the dashboard instead of
-    # only appearing in pipeline logs. needs_review: reserved for Phase 2 discovery output
-    # the user hasn't confirmed yet.
+    # (robots.txt disallow, exhausted retries, an LLM error, etc.) — surfaced in the dashboard
+    # instead of only appearing in pipeline logs. needs_review: allowed by the schema but not
+    # currently used (discovery output is reviewed before it's ever saved).
     status: Mapped[str] = mapped_column(String, default="active")
 
     competitor: Mapped["Competitor"] = relationship(back_populates="sources")
@@ -79,7 +91,7 @@ class Snapshot(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     source: Mapped["Source"] = relationship(back_populates="snapshots")
 
@@ -102,7 +114,7 @@ class Signal(Base):
     # yet). False for ordinary change-detected signals. See summarize_baseline() in
     # backend/analysis/analyst.py.
     is_baseline: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     source: Mapped["Source"] = relationship(back_populates="signals")
     # Two separate FKs to the same table, so each needs its own foreign_keys= to disambiguate.
@@ -123,12 +135,14 @@ class Report(Base):
     executive_summary: Mapped[str | None] = mapped_column(Text)
     signal_ids: Mapped[list[uuid.UUID] | None] = mapped_column(ARRAY(UUID(as_uuid=True)))
     chart_data: Mapped[dict | None] = mapped_column(JSONB)
+    # Legacy: PDFs used to be pre-rendered and uploaded on every run. They're rendered on
+    # demand now (backend/report/pdf_renderer.py), so new reports leave this NULL.
     pdf_url: Mapped[str | None] = mapped_column(String)
     # private: owner only. public: anyone with the link (see infra/sql/schema.sql RLS).
     # Set explicitly in assemble_report() rather than relying on this default alone — the
     # ownerless ComplyDo pilot company's reports must stay public. See docs/decisions.md.
     visibility: Mapped[str] = mapped_column(String, default="private")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     target_company: Mapped["TargetCompany"] = relationship(back_populates="reports")
 
@@ -143,4 +157,4 @@ class ChatMessage(Base):
     subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     role: Mapped[str] = mapped_column(String)  # user | assistant
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

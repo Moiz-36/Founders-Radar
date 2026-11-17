@@ -5,16 +5,22 @@ import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
+from bs4 import BeautifulSoup
 
 USER_AGENT = "FoundersRadarBot/0.1 (+https://github.com/; contact: founders-radar)"
 REQUEST_TIMEOUT = 15
+PLAYWRIGHT_TIMEOUT_MS = 30_000
 MIN_DELAY_SECONDS = 2.0
+# robots.txt is cached per host, but the API service is long-running — re-fetch after a day
+# so a site that changes its rules is eventually respected.
+ROBOTS_CACHE_TTL_SECONDS = 24 * 60 * 60
+HN_SEARCH_BY_DATE_URL = "https://hn.algolia.com/api/v1/search_by_date"
 
-_robots_cache: dict[str, RobotFileParser] = {}
+_robots_cache: dict[str, tuple[float, RobotFileParser]] = {}
 
 
 def is_allowed_by_robots(url: str) -> bool:
@@ -29,7 +35,8 @@ def is_allowed_by_robots(url: str) -> bool:
     parsed = urlparse(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
 
-    if origin not in _robots_cache:
+    cached = _robots_cache.get(origin)
+    if cached is None or time.monotonic() - cached[0] > ROBOTS_CACHE_TTL_SECONDS:
         parser = RobotFileParser()
         parser.set_url(f"{origin}/robots.txt")
         try:
@@ -44,17 +51,39 @@ def is_allowed_by_robots(url: str) -> bool:
                 # RobotFileParser defaults to disallow-all, so this must be set explicitly.
                 parser.allow_all = True
         except requests.RequestException:
-            # robots.txt unreachable — fail open (see note above)
-            parser.allow_all = True
-        _robots_cache[origin] = parser
+            parser.allow_all = True  # unreachable — fail open (see note above)
+        cached = (time.monotonic(), parser)
+        _robots_cache[origin] = cached
 
-    return _robots_cache[origin].can_fetch(USER_AGENT, url)
+    return cached[1].can_fetch(USER_AGENT, url)
+
+
+def html_to_text(html: str) -> str:
+    """Visible page text, without scripts, styles, navigation and footer boilerplate."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "nav", "footer"]):
+        tag.decompose()
+    return soup.get_text(separator=" ", strip=True)
+
+
+def render_with_playwright(url: str, timeout_ms: int = PLAYWRIGHT_TIMEOUT_MS) -> str:
+    """Fully rendered HTML of a JS-heavy page. Imported lazily: Playwright is heavy and only
+    the JS-rendering collectors and PDF rendering need it."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(user_agent=USER_AGENT)
+            page.goto(url, timeout=timeout_ms, wait_until="networkidle")
+            return page.content()
+        finally:
+            browser.close()
 
 
 @dataclass
 class CollectedContent:
     url: str
-    raw_content: str
     normalized_content: str
     content_hash: str
 
@@ -75,7 +104,7 @@ class BaseCollector(ABC):
 
     def _robots_check_url(self) -> str:
         """URL to check against robots.txt before fetching. Override when `self.url` isn't
-        itself a fetchable page (e.g. NewsCollector's `url` is a search query, not a URL)."""
+        itself a fetchable page (the HN collectors' `url` is a search term, not a URL)."""
         return self.url
 
     def collect(self, last_content_hash: str | None) -> CollectedContent | None:
@@ -85,19 +114,17 @@ class BaseCollector(ABC):
             raise PermissionError(f"robots.txt disallows fetching {robots_url}")
 
         self._respect_rate_limit()
-        raw = self.fetch_raw()
-        normalized = self._normalize(raw)
+        normalized = self._normalize(self.fetch_raw())
+        if not normalized:
+            # An empty page is almost always a failed render or a bot wall, not real content —
+            # storing it would produce a bogus "everything was removed" change next time.
+            raise ValueError(f"No text content fetched from {self.url}")
         content_hash = self._hash(normalized)
 
         if last_content_hash is not None and content_hash == last_content_hash:
             return None
 
-        return CollectedContent(
-            url=self.url,
-            raw_content=raw,
-            normalized_content=normalized,
-            content_hash=content_hash,
-        )
+        return CollectedContent(url=self.url, normalized_content=normalized, content_hash=content_hash)
 
     def _respect_rate_limit(self) -> None:
         if self._last_request_at is not None:
@@ -129,5 +156,54 @@ class BaseCollector(ABC):
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt < max_retries - 1:
-                    time.sleep(2**attempt)  # exponential backoff: 1s, 2s, 4s
+                    time.sleep(2**attempt)  # exponential backoff: 1s, 2s
         raise last_error  # type: ignore[misc]
+
+
+class StaticPageCollector(BaseCollector):
+    """Whole-page text of a server-rendered page via a plain GET."""
+
+    def fetch_raw(self) -> str:
+        return html_to_text(self._get().text)
+
+
+class RenderedPageCollector(BaseCollector):
+    """Whole-page text of a JS-rendered page (job boards, review widgets) via Playwright."""
+
+    def fetch_raw(self) -> str:
+        return html_to_text(render_with_playwright(self.url))
+
+
+class HackerNewsCollector(BaseCollector):
+    """Searches Hacker News (Algolia API). `url` is the search term (the competitor's name),
+    not a fetchable page.
+
+    Uses search_by_date (newest first) and leaves vote/comment counts out of the content:
+    those change constantly, so with them in, every run looked like a "change" even when no
+    new story or comment had appeared. Now the content only changes when new items do.
+    """
+
+    tags = "story"
+    hits_per_query = 20
+
+    def _robots_check_url(self) -> str:
+        return HN_SEARCH_BY_DATE_URL
+
+    def queries(self) -> list[str]:
+        return [self.url]
+
+    def fetch_raw(self) -> str:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for query in self.queries():
+            params = urlencode({"query": query, "tags": self.tags, "hitsPerPage": self.hits_per_query})
+            response = self._get(url=f"{HN_SEARCH_BY_DATE_URL}?{params}")
+            for hit in response.json().get("hits", []):
+                object_id = str(hit.get("objectID", ""))
+                text = (hit.get("title") or hit.get("comment_text") or "").strip()
+                if not text or object_id in seen:
+                    continue
+                seen.add(object_id)
+                link = hit.get("url") or hit.get("story_url") or ""
+                lines.append(f"{html_to_text(text)} — {link}".rstrip(" —"))
+        return "\n".join(lines)
