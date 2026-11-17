@@ -57,9 +57,30 @@ class Competitor(Base):
     # (a "Your company" badge, distinguishable in the widget comparison picker) so it never
     # reads as a competitive threat in generated report language.
     is_self: Mapped[bool] = mapped_column(default=False)
+    # Market data (backend/market/): a ticker for publicly traded competitors (set by the
+    # user, or suggested by the funding lookup), and when funding was last looked up.
+    stock_ticker: Mapped[str | None] = mapped_column(String)
+    funding_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     target_company: Mapped["TargetCompany"] = relationship(back_populates="competitors")
     sources: Mapped[list["Source"]] = relationship(back_populates="competitor")
+
+
+class FundingRoundRow(Base):
+    """One funding round extracted from web search (backend/market/funding.py), always with
+    the source URL it was extracted from. Replaced wholesale on each refresh."""
+
+    __tablename__ = "funding_rounds"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    competitor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("competitors.id", ondelete="CASCADE"))
+    round: Mapped[str] = mapped_column(String, nullable=False)
+    announced_on: Mapped[date | None] = mapped_column()
+    amount_usd: Mapped[float | None] = mapped_column(Float)
+    valuation_usd: Mapped[float | None] = mapped_column(Float)
+    investors: Mapped[str | None] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Source(Base):

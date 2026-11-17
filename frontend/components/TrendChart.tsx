@@ -19,7 +19,7 @@ interface TrendChartProps {
 // gates that apply to line charts, so up to 8 competitors get a distinct hue. Referenced as
 // CSS custom properties (set on the wrapping div below) so each slot swaps to its own
 // dark-surface step — not a separate palette, the same eight hues re-stepped for contrast.
-const SERIES_COLORS = [
+export const SERIES_COLORS = [
   "var(--series-1)", // blue
   "var(--series-2)", // orange
   "var(--series-3)", // aqua
@@ -32,7 +32,7 @@ const SERIES_COLORS = [
 const MAX_SERIES = SERIES_COLORS.length;
 
 // Light -> dark step per slot, from the dataviz skill's validated palette table.
-const SERIES_VARS_CLASS =
+export const SERIES_VARS_CLASS =
   "[--series-1:#2a78d6] dark:[--series-1:#3987e5] " +
   "[--series-2:#eb6834] dark:[--series-2:#d95926] " +
   "[--series-3:#1baf7a] dark:[--series-3:#199e70] " +

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChatPanel } from "@/components/ChatPanel";
 import { DeleteCompanyButton } from "@/components/DeleteCompanyButton";
+import { MarketSection } from "@/components/MarketSection";
 import { Nav } from "@/components/Nav";
 import { RunNowButton } from "@/components/RunNowButton";
 import { TrendChart } from "@/components/TrendChart";
@@ -21,7 +22,7 @@ const LIST_SOURCE_TYPES = new Set(["news", "community"]);
 function capitalize(text: string): string {
   return text.length > 0 ? text[0].toUpperCase() + text.slice(1) : text;
 }
-import { Competitor, Report, Snapshot, Source } from "@/lib/types";
+import { Competitor, FundingRound, Report, Snapshot, Source } from "@/lib/types";
 
 // Builds a chronological (oldest -> newest) per-competitor signal-count series from
 // each report's chart_data.volume_by_competitor (Report.chart_data, backend/report/assembler.py)
@@ -78,6 +79,16 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         : [source];
       return acc;
     }, {});
+  }
+
+  let fundingRounds: FundingRound[] = [];
+  if (competitorIds.length > 0) {
+    const { data: rounds } = await supabase
+      .from("funding_rounds")
+      .select("*")
+      .in("competitor_id", competitorIds)
+      .order("announced_on", { ascending: true });
+    fundingRounds = (rounds ?? []) as FundingRound[];
   }
 
   const allSources = Object.values(sourcesByCompetitor).flat();
@@ -166,6 +177,8 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
 
         <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-3">
           <div className="lg:col-span-2">
+            <MarketSection companyId={company.id} competitors={competitorList} fundingRounds={fundingRounds} />
+
             {trend.periods.length >= 2 && (
               <div className="mb-8 rounded-lg border border-border bg-canvas p-5 shadow-[0_1px_2px_0_rgba(60,64,67,0.08)] dark:border-border-dark dark:bg-surface-dark">
                 <TrendChart title="Signals by competitor, over time" periods={trend.periods} series={trend.series} />

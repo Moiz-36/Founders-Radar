@@ -10,12 +10,13 @@ import os
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 
 from backend.analysis.analyst import analyze_change, retrieve_related_context, summarize_baseline
 from backend.analysis.validator import validate_signal
@@ -30,10 +31,12 @@ from backend.chat.qa import (
 )
 from backend.collectors import COLLECTOR_BY_SOURCE_TYPE
 from backend.db.models import ChatMessage as ChatMessageRow
-from backend.db.models import Competitor, Report, Signal, Snapshot, Source, TargetCompany
+from backend.db.models import Competitor, FundingRoundRow, Report, Signal, Snapshot, Source, TargetCompany
 from backend.db.session import SessionLocal
 from backend.detection.change_detector import detect_change, embed
 from backend.discovery import find_competitors, find_sources
+from backend.market.funding import find_funding
+from backend.market.stocks import fetch_price_history
 from backend.report.assembler import assemble_report
 from backend.report.pdf_renderer import render_report_pdf
 from backend.scoring.scorer import score_signal
@@ -385,6 +388,85 @@ def report_pdf(report_id: str) -> Response:
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="founders-radar-report-{report_id}.pdf"'},
     )
+
+
+# --- Market data ---------------------------------------------------------------------------
+
+STOCK_FETCH_WORKERS = 8
+
+
+@app.get("/market/{target_company_id}/stocks")
+def company_stock_prices(target_company_id: str) -> dict:
+    """About a year of daily closes for every competitor of this company that has a ticker.
+    A ticker that fails (unknown symbol, provider down) is reported in `errors` rather than
+    failing the whole response. Same trust model as the other routes: the frontend's
+    /api/companies/[id]/market route has already checked ownership."""
+    company_id = _parse_uuid(target_company_id, "Company")
+    with SessionLocal() as session:
+        if session.get(TargetCompany, company_id) is None:
+            raise HTTPException(status_code=404, detail="Company not found")
+        competitors = session.execute(
+            select(Competitor)
+            .where(Competitor.target_company_id == company_id, Competitor.stock_ticker.is_not(None))
+            .order_by(Competitor.is_self.desc(), Competitor.name)
+        ).scalars().all()
+        targets = [(str(c.id), c.name, c.stock_ticker) for c in competitors]
+
+    def load(target):
+        competitor_id, name, ticker = target
+        try:
+            history = fetch_price_history(ticker)
+        except Exception as exc:  # unknown symbol, provider outage — reported per ticker
+            logger.warning("Stock prices for %s (%s) failed: %s", name, ticker, exc)
+            return None, {"competitor_id": competitor_id, "name": name, "ticker": ticker, "error": str(exc)[:200]}
+        return {
+            "competitor_id": competitor_id,
+            "name": name,
+            "ticker": history.ticker,
+            "currency": history.currency,
+            "points": [{"date": p.date.isoformat(), "close": p.close} for p in history.points],
+        }, None
+
+    series, errors = [], []
+    if targets:
+        with ThreadPoolExecutor(max_workers=min(STOCK_FETCH_WORKERS, len(targets))) as pool:
+            for ok, err in pool.map(load, targets):
+                if ok:
+                    series.append(ok)
+                else:
+                    errors.append(err)
+    return {"series": series, "errors": errors}
+
+
+@app.post("/market/competitors/{competitor_id}/funding")
+def refresh_competitor_funding(competitor_id: str) -> dict:
+    """Looks up one competitor's funding rounds (web search + LLM) and replaces its stored
+    rounds. One competitor per request keeps each call well inside the frontend's serverless
+    time limit; the frontend refreshes a company's competitors one after another. If the
+    lookup fails, the previously stored rounds are left untouched."""
+    with SessionLocal() as session:
+        competitor = session.get(Competitor, _parse_uuid(competitor_id, "Competitor"))
+        if competitor is None:
+            raise HTTPException(status_code=404, detail="Competitor not found")
+        try:
+            profile = find_funding(competitor.name, competitor.website)
+        except Exception:
+            logger.exception("Funding lookup failed for %s", competitor.name)
+            raise HTTPException(status_code=502, detail="Funding lookup failed — try again later") from None
+
+        session.execute(delete(FundingRoundRow).where(FundingRoundRow.competitor_id == competitor.id))
+        for r in profile.rounds:
+            session.add(FundingRoundRow(
+                competitor_id=competitor.id, round=r.round, announced_on=r.announced_on,
+                amount_usd=r.amount_usd, valuation_usd=r.valuation_usd, investors=r.investors,
+                source_url=r.source_url,
+            ))
+        # Only fill in a ticker the user hasn't set — never overwrite their choice.
+        if competitor.stock_ticker is None and profile.ticker:
+            competitor.stock_ticker = profile.ticker
+        competitor.funding_checked_at = datetime.now(timezone.utc)
+        session.commit()
+        return {"rounds": len(profile.rounds), "ticker": competitor.stock_ticker}
 
 
 # --- Discovery -----------------------------------------------------------------------------

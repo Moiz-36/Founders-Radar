@@ -45,6 +45,29 @@ export interface Competitor {
   // Optional "track my own company too": this row is the target company itself, not an
   // actual competitor — same pipeline, purely a UI-facing flag (see docs/decisions.md).
   is_self: boolean;
+  // Market data (backend/market/): ticker for a publicly traded competitor, and when its
+  // funding history was last looked up.
+  stock_ticker: string | null;
+  funding_checked_at: string | null;
+}
+
+export interface FundingRound {
+  id: string;
+  competitor_id: string;
+  round: string;
+  announced_on: string | null;
+  amount_usd: number | null;
+  valuation_usd: number | null;
+  investors: string | null;
+  source_url: string;
+}
+
+export interface StockSeries {
+  competitor_id: string;
+  name: string;
+  ticker: string;
+  currency: string | null;
+  points: { date: string; close: number }[];
 }
 
 export type SourceType = "pricing" | "feature" | "job_posting" | "news" | "community" | "review" | "general";

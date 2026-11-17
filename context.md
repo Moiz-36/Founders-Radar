@@ -62,6 +62,7 @@ Discovery (LLM + web search) → Collectors → Change Detector → Analyst (RAG
 
 **Runs**: "Run report now" claims the company (`target_companies.run_status`), runs in a background thread and returns 202; the frontend polls `run_status`. Each source is processed in its own DB savepoint, so a failure part-way (e.g. an LLM error) rolls that source back and the change is retried next run. The daily scheduled pass runs due companies most-overdue-first within a time budget.
 8. **Chat** (`backend/chat/qa.py`) — a Q&A assistant scoped to one report's signals, or (via pgvector search) a whole company's history.
+9. **Market data** (`backend/market/`) — share prices for publicly traded competitors (Yahoo chart API, cached) and funding/valuation history for private ones (Tavily + LLM extraction, every round cited), shown in the company page's Market section.
 
 For the actual current database schema, read `infra/sql/schema.sql` directly rather than trusting a copy here — it's the single source of truth and changes often enough that a duplicate would drift.
 

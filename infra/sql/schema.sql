@@ -557,3 +557,36 @@ ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS run_status TEXT
     CHECK (run_status IN ('running', 'done', 'skipped', 'failed'));
 ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS run_started_at TIMESTAMPTZ;
 ALTER TABLE target_companies ADD COLUMN IF NOT EXISTS run_finished_at TIMESTAMPTZ;
+
+-- Market data (2026-11-17): stock prices for public competitors and funding/valuation history
+-- for private ones, shown in the company page's Market section (backend/market/). Prices are
+-- fetched live and cached in the backend, so only the ticker is stored; funding rounds are
+-- extracted from web search, each with the URL it came from, and replaced on every refresh.
+ALTER TABLE competitors ADD COLUMN IF NOT EXISTS stock_ticker TEXT;
+ALTER TABLE competitors ADD COLUMN IF NOT EXISTS funding_checked_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS funding_rounds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    competitor_id UUID NOT NULL REFERENCES competitors(id) ON DELETE CASCADE,
+    round TEXT NOT NULL,
+    announced_on DATE,
+    amount_usd DOUBLE PRECISION CHECK (amount_usd > 0),
+    valuation_usd DOUBLE PRECISION CHECK (valuation_usd > 0),
+    investors TEXT,
+    source_url TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS funding_rounds_competitor_idx ON funding_rounds (competitor_id);
+
+-- Written only by the backend (its own DATABASE_URL connection bypasses RLS); owners read
+-- their own competitors' rounds — same ownership join as the sources policy above.
+ALTER TABLE funding_rounds ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "owner read access" ON funding_rounds;
+CREATE POLICY "owner read access" ON funding_rounds
+    FOR SELECT USING (
+        EXISTS (
+            SELECT 1 FROM competitors c
+            JOIN target_companies tc ON tc.id = c.target_company_id
+            WHERE c.id = funding_rounds.competitor_id AND tc.owner_id = auth.uid()
+        )
+    );
