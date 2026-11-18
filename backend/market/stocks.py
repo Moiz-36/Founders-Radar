@@ -12,7 +12,7 @@ company page doesn't refetch on every view.
 import re
 import time
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 
 import requests
 
@@ -64,7 +64,7 @@ def _parse(ticker: str, payload: dict) -> PriceHistory:
     for ts, close in zip(timestamps, closes, strict=False):
         if close is None:  # Yahoo emits nulls for halted/holiday rows
             continue
-        by_day[datetime.fromtimestamp(ts, UTC).date()] = round(float(close), 4)
+        by_day[datetime.fromtimestamp(ts, timezone.utc).date()] = round(float(close), 4)
     points = [PricePoint(day, close) for day, close in sorted(by_day.items())]
     if not points:
         raise ValueError(f"No price data for {ticker}")
