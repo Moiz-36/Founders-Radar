@@ -91,9 +91,12 @@ function mondayOf(iso: string): string {
 // otherwise — including the new multi-competitor case, since comparing several competitors
 // side by side is the whole point of picking more than one) into the actual grouping key
 // function every aggregator below takes.
+export function effectiveGroupBy(groupBy: WidgetGroupBy | null, selectedCompetitorCount: number): WidgetGroupBy {
+  return groupBy ?? (selectedCompetitorCount === 1 ? "source_type" : "competitor");
+}
+
 export function keyOfForGroupBy(groupBy: WidgetGroupBy | null, selectedCompetitorCount: number): (s: WidgetSignal) => string {
-  const effective = groupBy ?? (selectedCompetitorCount === 1 ? "source_type" : "competitor");
-  switch (effective) {
+  switch (effectiveGroupBy(groupBy, selectedCompetitorCount)) {
     case "source_type":
       return (s) => SOURCE_TYPE_LABELS[s.source_type];
     case "priority":

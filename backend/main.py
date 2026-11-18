@@ -31,11 +31,21 @@ from backend.chat.qa import (
 )
 from backend.collectors import COLLECTOR_BY_SOURCE_TYPE
 from backend.db.models import ChatMessage as ChatMessageRow
-from backend.db.models import Competitor, FundingRoundRow, Report, Signal, Snapshot, Source, TargetCompany
+from backend.db.models import (
+    Competitor,
+    FundingRoundRow,
+    PricePlanRow,
+    Report,
+    Signal,
+    Snapshot,
+    Source,
+    TargetCompany,
+)
 from backend.db.session import SessionLocal
 from backend.detection.change_detector import detect_change, embed
 from backend.discovery import find_competitors, find_sources
 from backend.market.funding import find_funding
+from backend.market.pricing import extract_price_plans
 from backend.market.stocks import fetch_price_history
 from backend.report.assembler import assemble_report
 from backend.report.pdf_renderer import render_report_pdf
@@ -136,6 +146,16 @@ def execute_claimed_run(company_id: uuid.UUID) -> dict:
         return {"target_company_id": str(company_id), "status": "failed"}
     status = "skipped" if report is None else "done"
     _finish_run(company_id, status)
+    # After the run is marked finished, so the founder sees their report without waiting on
+    # this; the Market section fills in a minute later.
+    try:
+        lookup_missing_funding(company_id)
+    except Exception:
+        logger.exception("Automatic funding lookup failed for target company %s", company_id)
+    try:
+        refresh_company_prices(company_id)
+    except Exception:
+        logger.exception("Automatic price extraction failed for target company %s", company_id)
     return {
         "target_company_id": str(company_id),
         "status": status,
@@ -449,24 +469,114 @@ def refresh_competitor_funding(competitor_id: str) -> dict:
         if competitor is None:
             raise HTTPException(status_code=404, detail="Competitor not found")
         try:
-            profile = find_funding(competitor.name, competitor.website)
+            round_count = _refresh_funding(session, competitor)
         except Exception:
             logger.exception("Funding lookup failed for %s", competitor.name)
             raise HTTPException(status_code=502, detail="Funding lookup failed — try again later") from None
+        return {"rounds": round_count, "ticker": competitor.stock_ticker}
 
-        session.execute(delete(FundingRoundRow).where(FundingRoundRow.competitor_id == competitor.id))
-        for r in profile.rounds:
-            session.add(FundingRoundRow(
-                competitor_id=competitor.id, round=r.round, announced_on=r.announced_on,
-                amount_usd=r.amount_usd, valuation_usd=r.valuation_usd, investors=r.investors,
-                source_url=r.source_url,
+
+def _refresh_funding(session, competitor: Competitor) -> int:
+    """Looks up one competitor's funding (web search + LLM), replaces its stored rounds and
+    fills in a stock ticker if it's publicly traded. Returns the number of rounds found.
+    Raises without touching stored data if the lookup fails."""
+    profile = find_funding(competitor.name, competitor.website)
+    session.execute(delete(FundingRoundRow).where(FundingRoundRow.competitor_id == competitor.id))
+    for r in profile.rounds:
+        session.add(FundingRoundRow(
+            competitor_id=competitor.id, round=r.round, announced_on=r.announced_on,
+            amount_usd=r.amount_usd, valuation_usd=r.valuation_usd, investors=r.investors,
+            source_url=r.source_url,
+        ))
+    # Only fill in a ticker the user hasn't set — never overwrite their choice.
+    if competitor.stock_ticker is None and profile.ticker:
+        competitor.stock_ticker = profile.ticker
+    competitor.funding_checked_at = datetime.now(timezone.utc)
+    session.commit()
+    return len(profile.rounds)
+
+
+def lookup_missing_funding(company_id: uuid.UUID) -> None:
+    """After a run, looks up funding/ticker for competitors that have never been checked, so
+    a new company's Market section is filled in without the founder having to ask. One
+    competitor at a time (each is a search + LLM call); one failure doesn't stop the rest,
+    and a competitor that failed stays unchecked, so the next run tries it again."""
+    with SessionLocal() as session:
+        unchecked = session.execute(
+            select(Competitor).where(
+                Competitor.target_company_id == company_id, Competitor.funding_checked_at.is_(None)
+            )
+        ).scalars().all()
+        for competitor in unchecked:
+            try:
+                _refresh_funding(session, competitor)
+            except Exception:
+                session.rollback()
+                logger.exception("Automatic funding lookup failed for %s", competitor.name)
+
+
+@app.post("/market/competitors/{competitor_id}/prices")
+def refresh_competitor_prices(competitor_id: str) -> dict:
+    """Extracts plan prices from this competitor's latest pricing-page snapshot(s). Only
+    re-extracts a page whose content changed since last time, so it's cheap to call often.
+    One competitor per request, for the same serverless time limit reason as funding."""
+    with SessionLocal() as session:
+        competitor = session.get(Competitor, _parse_uuid(competitor_id, "Competitor"))
+        if competitor is None:
+            raise HTTPException(status_code=404, detail="Competitor not found")
+        try:
+            plan_count = _refresh_prices(session, competitor)
+        except Exception:
+            logger.exception("Price extraction failed for %s", competitor.name)
+            raise HTTPException(status_code=502, detail="Price extraction failed — try again later") from None
+        return {"plans": plan_count}
+
+
+def _refresh_prices(session, competitor: Competitor) -> int:
+    """Returns the number of plans now stored for this competitor. A pricing page with no
+    snapshot yet (never fetched, or broken) is skipped; its old plans, if any, are kept."""
+    sources = session.execute(
+        select(Source).where(Source.competitor_id == competitor.id, Source.source_type == "pricing")
+    ).scalars().all()
+    for source in sources:
+        snapshot = session.execute(
+            select(Snapshot).where(Snapshot.source_id == source.id).order_by(Snapshot.fetched_at.desc()).limit(1)
+        ).scalar_one_or_none()
+        if snapshot is None:
+            continue
+        stored_hash = session.execute(
+            select(PricePlanRow.source_hash).where(PricePlanRow.source_id == source.id).limit(1)
+        ).scalar_one_or_none()
+        if stored_hash == snapshot.content_hash:
+            continue  # page unchanged since the last extraction
+        plans = extract_price_plans(competitor.name, snapshot.content)
+        session.execute(delete(PricePlanRow).where(PricePlanRow.source_id == source.id))
+        for position, plan in enumerate(plans):
+            session.add(PricePlanRow(
+                competitor_id=competitor.id, source_id=source.id, plan=plan.plan, price=plan.price,
+                currency=plan.currency, billing_period=plan.billing_period,
+                monthly_price=plan.monthly_price, unit=plan.unit, position=position,
+                source_hash=snapshot.content_hash,
             ))
-        # Only fill in a ticker the user hasn't set — never overwrite their choice.
-        if competitor.stock_ticker is None and profile.ticker:
-            competitor.stock_ticker = profile.ticker
-        competitor.funding_checked_at = datetime.now(timezone.utc)
         session.commit()
-        return {"rounds": len(profile.rounds), "ticker": competitor.stock_ticker}
+    return session.execute(
+        select(func.count()).select_from(PricePlanRow).where(PricePlanRow.competitor_id == competitor.id)
+    ).scalar_one()
+
+
+def refresh_company_prices(company_id: uuid.UUID) -> None:
+    """After a run: re-extracts plan prices for any competitor whose pricing page changed.
+    One competitor at a time; one failure doesn't stop the rest."""
+    with SessionLocal() as session:
+        competitors = session.execute(
+            select(Competitor).where(Competitor.target_company_id == company_id)
+        ).scalars().all()
+        for competitor in competitors:
+            try:
+                _refresh_prices(session, competitor)
+            except Exception:
+                session.rollback()
+                logger.exception("Automatic price extraction failed for %s", competitor.name)
 
 
 # --- Discovery -----------------------------------------------------------------------------

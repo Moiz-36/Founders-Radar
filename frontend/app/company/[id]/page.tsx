@@ -177,7 +177,12 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
 
         <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-3">
           <div className="lg:col-span-2">
-            <MarketSection companyId={company.id} competitors={competitorList} fundingRounds={fundingRounds} />
+            <MarketSection
+              companyId={company.id}
+              competitors={competitorList}
+              fundingRounds={fundingRounds}
+              lastRunStartedAt={company.run_started_at}
+            />
 
             {trend.periods.length >= 2 && (
               <div className="mb-8 rounded-lg border border-border bg-canvas p-5 shadow-[0_1px_2px_0_rgba(60,64,67,0.08)] dark:border-border-dark dark:bg-surface-dark">

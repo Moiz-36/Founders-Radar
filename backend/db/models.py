@@ -83,6 +83,26 @@ class FundingRoundRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class PricePlanRow(Base):
+    """One plan from a competitor's pricing page, extracted by backend/market/pricing.py from
+    the page's latest snapshot. Replaced wholesale when the page content changes."""
+
+    __tablename__ = "price_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    competitor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("competitors.id", ondelete="CASCADE"))
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
+    plan: Mapped[str] = mapped_column(String, nullable=False)
+    price: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String)
+    billing_period: Mapped[str | None] = mapped_column(String)
+    monthly_price: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String)
+    position: Mapped[int] = mapped_column(default=0)
+    source_hash: Mapped[str] = mapped_column(String, nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class Source(Base):
     __tablename__ = "sources"
 

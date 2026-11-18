@@ -5,6 +5,9 @@ import { useState } from "react";
 interface ColumnChartProps {
   title: string;
   data: { label: string; value: number }[];
+  // Optional drill-down: clicking a bar reports its label; the selected bar stays highlighted.
+  onSelect?: (label: string) => void;
+  selected?: string | null;
 }
 
 const COL_WIDTH = 34;
@@ -15,7 +18,7 @@ const PLOT_HEIGHT = CHART_HEIGHT - LABEL_HEIGHT;
 
 // Vertical-orientation sibling of BarChart — same "one sequential hue, no categorical set"
 // reasoning (magnitude per already-labeled category), just oriented for a narrower widget card.
-export function ColumnChart({ title, data }: ColumnChartProps) {
+export function ColumnChart({ title, data, onSelect, selected = null }: ColumnChartProps) {
   const [hovered, setHovered] = useState<number | null>(null);
 
   if (data.length === 0) return null;
@@ -40,7 +43,8 @@ export function ColumnChart({ title, data }: ColumnChartProps) {
           const x = COL_GAP + i * colStep;
           const colHeight = Math.max((d.value / max) * (PLOT_HEIGHT - 20), 3);
           const y = PLOT_HEIGHT - colHeight;
-          const isHovered = hovered === i;
+          const isHovered = hovered === i || selected === d.label;
+          const isDimmed = selected !== null && selected !== d.label && hovered !== i;
 
           return (
             <g
@@ -52,7 +56,10 @@ export function ColumnChart({ title, data }: ColumnChartProps) {
               onMouseLeave={() => setHovered(null)}
               onFocus={() => setHovered(i)}
               onBlur={() => setHovered(null)}
-              style={{ cursor: "default", outline: "none" }}
+              onClick={onSelect ? () => onSelect(d.label) : undefined}
+              onKeyDown={onSelect ? (e) => (e.key === "Enter" || e.key === " ") && onSelect(d.label) : undefined}
+              opacity={isDimmed ? 0.4 : 1}
+              style={{ cursor: onSelect ? "pointer" : "default", outline: "none" }}
             >
               <text x={x + COL_WIDTH / 2} y={y - 6} textAnchor="middle" fontSize="11" fontWeight="bold" fill="var(--chart-ink)">
                 {d.value}

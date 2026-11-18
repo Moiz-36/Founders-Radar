@@ -52,7 +52,7 @@ export default async function CustomDashboardPage() {
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
         <h1 className="font-heading text-2xl font-semibold text-ink dark:text-ink-dark">Custom Widgets</h1>
         <p className="mt-1 text-sm text-ink-muted dark:text-ink-muted-dark">
-          Mix and match feeds and charts from any company you track — drag a widget&apos;s handle to reorder it.
+          Build your own wall of charts from any company you track. Drag a widget to reorder it, use S / M / L to resize it, and expand it to see it full screen.
         </p>
 
         {companyList.length === 0 ? (

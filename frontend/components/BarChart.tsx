@@ -5,6 +5,9 @@ import { useState } from "react";
 interface BarChartProps {
   title: string;
   data: { label: string; value: number }[];
+  // Optional drill-down: clicking a bar reports its label; the selected bar stays highlighted.
+  onSelect?: (label: string) => void;
+  selected?: string | null;
 }
 
 const BAR_HEIGHT = 18;
@@ -13,7 +16,7 @@ const LABEL_WIDTH = 110;
 const CHART_WIDTH = 420;
 const BAR_AREA_WIDTH = CHART_WIDTH - LABEL_WIDTH - 40; // leaves room for the value label
 
-export function BarChart({ title, data }: BarChartProps) {
+export function BarChart({ title, data, onSelect, selected = null }: BarChartProps) {
   const [hovered, setHovered] = useState<number | null>(null);
 
   if (data.length === 0) return null;
@@ -42,7 +45,8 @@ export function BarChart({ title, data }: BarChartProps) {
         {data.map((d, i) => {
           const y = i * rowHeight;
           const barWidth = Math.max((d.value / max) * BAR_AREA_WIDTH, 3);
-          const isHovered = hovered === i;
+          const isHovered = hovered === i || selected === d.label;
+          const isDimmed = selected !== null && selected !== d.label && hovered !== i;
 
           return (
             <g
@@ -54,7 +58,10 @@ export function BarChart({ title, data }: BarChartProps) {
               onMouseLeave={() => setHovered(null)}
               onFocus={() => setHovered(i)}
               onBlur={() => setHovered(null)}
-              style={{ cursor: "default", outline: "none" }}
+              onClick={onSelect ? () => onSelect(d.label) : undefined}
+              onKeyDown={onSelect ? (e) => (e.key === "Enter" || e.key === " ") && onSelect(d.label) : undefined}
+              opacity={isDimmed ? 0.4 : 1}
+              style={{ cursor: onSelect ? "pointer" : "default", outline: "none" }}
             >
               <text
                 x={LABEL_WIDTH - 10}

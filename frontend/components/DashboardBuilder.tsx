@@ -4,12 +4,13 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 import { WidgetCard } from "@/components/WidgetCard";
 import { createClient } from "@/lib/supabase/client";
-import { DashboardWidget, SourceType, WidgetDisplay, WidgetGroupBy } from "@/lib/types";
+import { DashboardWidget, SourceType, WidgetDisplay, WidgetGroupBy, WidgetSize } from "@/lib/types";
 import { SOURCE_TYPE_LABELS } from "@/lib/widgetData";
 
 const SOURCE_TYPES = Object.keys(SOURCE_TYPE_LABELS) as SourceType[];
 
 const DISPLAY_LABELS: Record<WidgetDisplay, string> = {
+  price_comparison: "Price comparison (actual plan prices)",
   feed: "Feed (list of recent changes)",
   bar: "Bar chart (horizontal totals)",
   column: "Column chart (vertical totals)",
@@ -21,6 +22,37 @@ const DISPLAY_LABELS: Record<WidgetDisplay, string> = {
   stat: "Stat tile (single big number)",
   heatmap: "Heatmap (two-dimension grid)",
   sparklines: "Sparklines (small-multiple trends)",
+};
+
+// Shown under the "Display as" picker so it's clear what each option actually draws.
+const DISPLAY_HELP: Record<WidgetDisplay, string> = {
+  price_comparison: "Each competitor's plans and their monthly price, read from their pricing pages.",
+  feed: "The latest detected changes as cards: what changed, why it matters, what to do.",
+  bar: "How many changes per group, as horizontal bars. Click a bar to see the changes behind it.",
+  column: "How many changes per group, as vertical columns. Click a column to see its changes.",
+  line: "How many changes per group each week, as lines: is activity rising or falling?",
+  area: "Same as the line chart, with the area under each line filled in.",
+  stacked_bar: "How many changes per group, each bar split into high / medium / low priority.",
+  donut: "Each group's share of all changes. Click a slice to see its changes.",
+  table: "Every detected change in a sortable list.",
+  stat: "One big number: total changes detected, and how many are high priority.",
+  heatmap: "A grid of competitor x kind of change; darker cells mean more changes.",
+  sparklines: "A small weekly trend line per group, for comparing many at a glance.",
+};
+
+const GROUP_BY_HELP: Record<WidgetGroupBy | "", string> = {
+  "": "Signal type if you pick exactly one competitor, otherwise competitor.",
+  competitor: "One bar/slice per competitor: who is changing the most?",
+  source_type: "One per kind of change (pricing, features, jobs, news, reviews...): what is changing?",
+  priority: "High / medium / low: how much the changes matter to you.",
+  week: "One per week: when did the changes happen?",
+};
+
+// Column span on the grid below (1 column on phones, 2 on tablets, 3 on wide screens).
+const SIZE_SPAN: Record<WidgetSize, string> = {
+  small: "min-w-0",
+  medium: "min-w-0 sm:col-span-2",
+  large: "min-w-0 sm:col-span-2 xl:col-span-3",
 };
 
 const GROUP_BY_LABELS: Record<WidgetGroupBy, string> = {
@@ -67,6 +99,7 @@ export function DashboardBuilder({
   const [selectedCompetitorIds, setSelectedCompetitorIds] = useState<string[]>([]);
   const [sourceType, setSourceType] = useState<string>("");
   const [display, setDisplay] = useState<WidgetDisplay>("feed");
+  const isPriceWidget = display === "price_comparison";
   const [groupBy, setGroupBy] = useState<WidgetGroupBy | "">("");
   const [title, setTitle] = useState("");
   const [saving, setSaving] = useState(false);
@@ -87,8 +120,22 @@ export function DashboardBuilder({
         : ids.length <= 3
           ? ids.map((id) => competitorLabel(w.target_company_id, id)).join(", ")
           : `${ids.length} competitors`;
+    if (w.display === "price_comparison") return [company, competitorPart, "Plan prices"].join(" — ");
     const type = w.source_type ? SOURCE_TYPE_LABELS[w.source_type] : null;
     return [company, competitorPart, type ?? "All types"].join(" — ");
+  }
+
+  function competitorNames(w: DashboardWidget): string {
+    const ids = w.competitor_ids && w.competitor_ids.length > 0 ? w.competitor_ids : w.competitor_id ? [w.competitor_id] : [];
+    if (ids.length === 0) return "all competitors";
+    const names = ids.map((id) => competitorLabel(w.target_company_id, id));
+    return names.length <= 2 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  }
+
+  async function handleResize(id: string, size: WidgetSize) {
+    setWidgets((prev) => prev.map((w) => (w.id === id ? { ...w, size } : w)));
+    const { error: updateError } = await createClient().from("dashboard_widgets").update({ size }).eq("id", id);
+    if (updateError) setError(updateError.message);
   }
 
   function toggleCompetitor(id: string) {
@@ -109,8 +156,10 @@ export function DashboardBuilder({
         owner_id: ownerId,
         target_company_id: companyId,
         competitor_ids: selectedCompetitorIds.length > 0 ? selectedCompetitorIds : null,
-        source_type: sourceType || null,
+        source_type: isPriceWidget ? "pricing" : sourceType || null,
         display,
+        // A price comparison needs room for its plan labels; start it at two columns.
+        size: isPriceWidget ? "medium" : "small",
         group_by: groupBy || null,
         title: title.trim() || null,
         position: nextPosition,
@@ -168,7 +217,7 @@ export function DashboardBuilder({
   }
 
   const competitorOptions = competitorsByCompany[companyId] ?? [];
-  const needsGrouping = display !== "feed" && display !== "table";
+  const needsGrouping = !["feed", "table", "stat", "heatmap", "price_comparison"].includes(display);
 
   return (
     <div>
@@ -211,6 +260,7 @@ export function DashboardBuilder({
               </select>
             </div>
 
+            {!isPriceWidget && (
             <div className="min-w-[150px]">
               <label className={labelClass}>Signal type</label>
               <select className={inputClass} value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
@@ -222,8 +272,9 @@ export function DashboardBuilder({
                 ))}
               </select>
             </div>
+            )}
 
-            <div className="min-w-[240px]">
+            <div className="min-w-[240px] max-w-[320px]">
               <label className={labelClass}>Display as</label>
               <select className={inputClass} value={display} onChange={(e) => setDisplay(e.target.value as WidgetDisplay)}>
                 {(Object.keys(DISPLAY_LABELS) as WidgetDisplay[]).map((d) => (
@@ -232,10 +283,11 @@ export function DashboardBuilder({
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-xs text-ink-muted dark:text-ink-muted-dark">{DISPLAY_HELP[display]}</p>
             </div>
 
             {needsGrouping && (
-              <div className="min-w-[160px]">
+              <div className="min-w-[160px] max-w-[260px]">
                 <label className={labelClass}>Break down by</label>
                 <select className={inputClass} value={groupBy} onChange={(e) => setGroupBy(e.target.value as WidgetGroupBy | "")}>
                   <option value="">Auto</option>
@@ -245,6 +297,7 @@ export function DashboardBuilder({
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-ink-muted dark:text-ink-muted-dark">{GROUP_BY_HELP[groupBy]}</p>
               </div>
             )}
 
@@ -312,11 +365,13 @@ export function DashboardBuilder({
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {widgets.map((w) => (
+            <div key={w.id} className={SIZE_SPAN[w.size ?? "medium"]}>
             <WidgetCard
-              key={w.id}
               widget={w}
               title={widgetTitle(w)}
+              competitorNames={competitorNames(w)}
               onRemove={handleRemove}
+              onResize={handleResize}
               dragHandlers={{
                 draggable: true,
                 onDragStart: () => setDraggedId(w.id),
@@ -325,6 +380,7 @@ export function DashboardBuilder({
                 isDragging: draggedId === w.id,
               }}
             />
+            </div>
           ))}
         </div>
       )}

@@ -62,6 +62,20 @@ export interface FundingRound {
   source_url: string;
 }
 
+// One plan from a competitor's pricing page (backend/market/pricing.py).
+export interface PricePlan {
+  id: string;
+  competitor_id: string;
+  plan: string;
+  price: number | null;
+  currency: string | null;
+  billing_period: "month" | "year" | "one_time" | null;
+  monthly_price: number | null;
+  unit: string | null;
+  position: number;
+  extracted_at: string;
+}
+
 export interface StockSeries {
   competitor_id: string;
   name: string;
@@ -117,7 +131,12 @@ export type WidgetDisplay =
   | "table"
   | "stat"
   | "heatmap"
-  | "sparklines";
+  | "sparklines"
+  // Not a signal chart: actual plan prices from each competitor's pricing page (price_plans).
+  | "price_comparison";
+
+// Width on the widget wall's 3-column grid: one column, two, or the full row.
+export type WidgetSize = "small" | "medium" | "large";
 
 // What to break the chart down by. null = auto (mirrors the pre-2026-09-14 implicit rule:
 // source_type when scoped to one competitor, competitor otherwise) — kept for widget rows
@@ -139,5 +158,6 @@ export interface DashboardWidget {
   group_by: WidgetGroupBy | null;
   title: string | null;
   position: number;
+  size: WidgetSize;
   created_at: string;
 }

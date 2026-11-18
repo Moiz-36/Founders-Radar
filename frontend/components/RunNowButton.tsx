@@ -38,6 +38,9 @@ export function RunNowButton({ companyId, initialStatus, initialStartedAt }: Run
       .maybeSingle();
 
     if (data && isActiveRun(data.run_status, data.run_started_at)) {
+      // Re-render the page as the run goes, so each source's "last checked" fills in as it's
+      // checked instead of all reading "Not checked yet" until the very end.
+      router.refresh();
       timer.current = setTimeout(poll, POLL_INTERVAL_MS);
       return;
     }

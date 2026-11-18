@@ -590,3 +590,52 @@ CREATE POLICY "owner read access" ON funding_rounds
             WHERE c.id = funding_rounds.competitor_id AND tc.owner_id = auth.uid()
         )
     );
+
+-- Widget wall (2026-11-18): each widget remembers its size on the grid; "general" was missing
+-- from the widget signal-type filter (saving a "General overview" widget failed); and a
+-- new "price_comparison" display, backed by price_plans below.
+ALTER TABLE dashboard_widgets ADD COLUMN IF NOT EXISTS size TEXT NOT NULL DEFAULT 'medium';
+ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_size_check;
+ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_size_check
+    CHECK (size IN ('small', 'medium', 'large'));
+ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_source_type_check;
+ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_source_type_check
+    CHECK (source_type IN ('pricing', 'feature', 'job_posting', 'news', 'community', 'review', 'general'));
+ALTER TABLE dashboard_widgets DROP CONSTRAINT IF EXISTS dashboard_widgets_display_check;
+ALTER TABLE dashboard_widgets ADD CONSTRAINT dashboard_widgets_display_check
+    CHECK (display IN ('feed', 'bar', 'column', 'line', 'area', 'stacked_bar', 'donut', 'table', 'stat',
+                       'heatmap', 'sparklines', 'price_comparison'));
+
+-- Real plan prices, extracted by the LLM from each competitor's latest pricing-page snapshot
+-- (backend/market/pricing.py). Replaced whenever that page's content changes; source_hash is
+-- the snapshot content hash the rows came from, so an unchanged page isn't re-extracted.
+CREATE TABLE IF NOT EXISTS price_plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    competitor_id UUID NOT NULL REFERENCES competitors(id) ON DELETE CASCADE,
+    source_id UUID NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    plan TEXT NOT NULL,
+    -- NULL price = not listed ("Contact sales" / custom).
+    price DOUBLE PRECISION CHECK (price >= 0),
+    -- ISO code when the page makes it clear, NULL when it doesn't (never guessed).
+    currency TEXT,
+    -- 'month' | 'year' | 'one_time' | NULL; monthly_price is price per month for comparison.
+    billing_period TEXT,
+    monthly_price DOUBLE PRECISION CHECK (monthly_price >= 0),
+    -- What the price is per: 'seat', 'user', 'session', ... ; NULL = flat.
+    unit TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    source_hash TEXT NOT NULL,
+    extracted_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS price_plans_competitor_idx ON price_plans (competitor_id);
+
+ALTER TABLE price_plans ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "owner read access" ON price_plans;
+CREATE POLICY "owner read access" ON price_plans
+    FOR SELECT USING (
+        EXISTS (
+            SELECT 1 FROM competitors c
+            JOIN target_companies tc ON tc.id = c.target_company_id
+            WHERE c.id = price_plans.competitor_id AND tc.owner_id = auth.uid()
+        )
+    );

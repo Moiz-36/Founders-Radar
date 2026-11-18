@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ColumnChart } from "@/components/charts/ColumnChart";
+import { PriceComparison } from "@/components/PriceComparison";
 import { StockChart } from "@/components/StockChart";
 import { createClient } from "@/lib/supabase/client";
 import type { Competitor, FundingRound, StockSeries } from "@/lib/types";
@@ -89,16 +90,36 @@ function TickerInput({ competitor }: { competitor: Competitor }) {
   );
 }
 
+// After a run, the backend looks up funding for competitors never checked before
+// (backend/main.py's lookup_missing_funding). That takes a minute or so after the report
+// itself, so the section re-renders on this interval until it lands.
+const AUTO_LOOKUP_POLL_MS = 15_000;
+const AUTO_LOOKUP_WINDOW_MS = 6 * 60_000;
+
 export function MarketSection({
   companyId,
   competitors,
   fundingRounds,
+  lastRunStartedAt,
 }: {
   companyId: string;
   competitors: Competitor[];
   fundingRounds: FundingRound[];
+  lastRunStartedAt: string | null;
 }) {
   const router = useRouter();
+  const uncheckedCount = competitors.filter((c) => !c.funding_checked_at).length;
+  const [now] = useState(() => Date.now());
+  const autoLookupPending =
+    uncheckedCount > 0 &&
+    !!lastRunStartedAt &&
+    now - new Date(lastRunStartedAt).getTime() < AUTO_LOOKUP_WINDOW_MS;
+
+  useEffect(() => {
+    if (!autoLookupPending) return;
+    const timer = setInterval(() => router.refresh(), AUTO_LOOKUP_POLL_MS);
+    return () => clearInterval(timer);
+  }, [autoLookupPending, router]);
   const [stocks, setStocks] = useState<StockSeries[] | null>(null);
   const [stockErrors, setStockErrors] = useState<StockError[]>([]);
   const [stockLoadFailed, setStockLoadFailed] = useState(false);
@@ -185,8 +206,9 @@ export function MarketSection({
       <div className={`${card} mb-4`}>
         {!hasTickers ? (
           <p className="text-sm text-ink-muted dark:text-ink-muted-dark">
-            No publicly traded competitors yet. Add a ticker below (or refresh funding data — it detects public
-            companies) to compare share prices.
+            {autoLookupPending
+              ? "Checking whether any competitor is publicly traded…"
+              : "None of these competitors is publicly traded (so there are no share prices to compare). If one is, add its ticker below."}
           </p>
         ) : stockLoadFailed ? (
           <p className="text-sm text-critical dark:text-critical-dark">Couldn&apos;t load share prices right now.</p>
@@ -211,6 +233,11 @@ export function MarketSection({
             ))}
           </div>
         </details>
+      </div>
+
+      <div className={`${card} mb-4`}>
+        <div className={`mb-2 ${sectionLabel}`}>Plan prices</div>
+        <PriceComparison competitors={competitors} />
       </div>
 
       <div className={card}>
@@ -244,7 +271,11 @@ export function MarketSection({
 
         {fundingRounds.length === 0 ? (
           <p className="text-sm text-ink-muted dark:text-ink-muted-dark">
-            {lastChecked ? "No funding rounds found in public sources." : "Not looked up yet."}
+            {autoLookupPending
+              ? "Looking up funding and valuations automatically — this fills in a minute or two after the first report."
+              : lastChecked
+                ? "No funding rounds found in public sources."
+                : "Not looked up yet — click “Look up funding data”."}
           </p>
         ) : (
           <>

@@ -2,7 +2,7 @@
 endpoints, and funding_rounds RLS."""
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -185,6 +185,26 @@ def test_funding_refresh_never_overwrites_a_user_ticker(session, company, monkey
     assert client.post(f"/market/competitors/{public.id}/funding").json()["ticker"] == "PUB"
 
 
+def test_lookup_missing_funding_checks_only_unchecked_and_survives_failures(session, company, monkeypatch):
+    already = competitor(session, "Broken Co")
+    already.funding_checked_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    session.commit()
+    looked_up = []
+
+    def fake(name, website):
+        looked_up.append(name)
+        if name == "Public Co":
+            raise RuntimeError("search failed")
+        return funding.FundingProfile(None, [funding.FundingRound("Seed", None, 1e6, None, None, "https://x/1")])
+
+    monkeypatch.setattr(main, "find_funding", fake)
+    main.lookup_missing_funding(company)
+    assert sorted(looked_up) == ["Private Co", "Public Co"]  # Broken Co was already checked
+    assert competitor(session, "Private Co").funding_checked_at is not None
+    assert competitor(session, "Public Co").funding_checked_at is None  # failed: retried next run
+    assert session.execute(select(FundingRoundRow.round)).scalars().all() == ["Seed"]
+
+
 def test_funding_refresh_failure_keeps_old_rounds(session, company, monkeypatch):
     private = competitor(session, "Private Co")
     session.add(FundingRoundRow(competitor_id=private.id, round="Seed", source_url="https://x"))
@@ -215,6 +235,101 @@ def test_funding_rounds_rls(db_conn, make_user):
     with as_user(db_conn, owner):
         assert count() == 1
         db_conn.execute("UPDATE competitors SET stock_ticker = 'ABC' WHERE id = %s", (competitor_id,))
+    with as_user(db_conn, stranger):
+        assert count() == 0
+    with as_user(db_conn, None, role="anon"):
+        assert count() == 0
+    db_conn.execute("DELETE FROM competitors WHERE id = %s", (competitor_id,))
+    assert count() == 0  # cascades
+
+
+# --- pricing.py ----------------------------------------------------------------------------
+
+from backend.db.models import PricePlanRow, Snapshot, Source  # noqa: E402
+from backend.market import pricing  # noqa: E402
+
+
+def test_extract_price_plans_normalizes_and_never_guesses(monkeypatch):
+    monkeypatch.setattr(pricing, "complete_json", lambda s, u, max_tokens=2048: {"plans": [
+        {"plan": "Free", "price": 0, "currency": "eur", "billing_period": "month", "unit": None},
+        {"plan": "Pro", "price": "1,200", "currency": "USD", "billing_period": "year", "unit": "Seat"},
+        {"plan": "pro", "price": 5},                       # duplicate name, dropped
+        {"plan": "Enterprise", "price": "custom", "currency": "dollars", "billing_period": "weekly"},
+        {"plan": "", "price": 3},                          # unnamed, dropped
+        "not a dict",
+    ]})
+    plans = pricing.extract_price_plans("Acme", "page text")
+    assert [p.plan for p in plans] == ["Free", "Pro", "Enterprise"]
+    assert (plans[0].price, plans[0].currency, plans[0].monthly_price) == (0, "EUR", 0)
+    assert (plans[1].price, plans[1].monthly_price, plans[1].unit) == (1200, 100, "seat")
+    enterprise = plans[2]
+    assert (enterprise.price, enterprise.currency, enterprise.billing_period, enterprise.monthly_price) == (
+        None, None, None, None)
+
+
+def test_price_refresh_extracts_only_when_the_page_changed(session, company, monkeypatch):
+    private = competitor(session, "Private Co")
+    source = Source(competitor_id=private.id, source_type="pricing", url="https://p.co/pricing")
+    session.add(source)
+    session.flush()
+    session.add(Snapshot(source_id=source.id, content="pro $10/month", content_hash="h1"))
+    session.commit()
+    calls = []
+
+    def fake(name, text):
+        calls.append(text)
+        return [pricing.PricePlan("Pro", 10, "USD", "month", 10, None)]
+
+    monkeypatch.setattr(main, "extract_price_plans", fake)
+    assert client.post(f"/market/competitors/{private.id}/prices").json() == {"plans": 1}
+    assert client.post(f"/market/competitors/{private.id}/prices").json() == {"plans": 1}
+    assert len(calls) == 1  # unchanged page, not re-extracted
+
+    session.add(Snapshot(source_id=source.id, content="pro $12/month",
+                         content_hash="h2", fetched_at=datetime(2030, 1, 1, tzinfo=timezone.utc)))
+    session.commit()
+    monkeypatch.setattr(main, "extract_price_plans", lambda n, t: [
+        pricing.PricePlan("Pro", 12, "USD", "month", 12, None),
+        pricing.PricePlan("Team", 30, "USD", "month", 30, "seat")])
+    assert client.post(f"/market/competitors/{private.id}/prices").json() == {"plans": 2}
+    session.expire_all()
+    stored = session.execute(select(PricePlanRow.plan, PricePlanRow.source_hash).order_by(PricePlanRow.position)).all()
+    assert stored == [("Pro", "h2"), ("Team", "h2")]  # replaced, not appended
+
+
+def test_price_refresh_failure_keeps_old_plans(session, company, monkeypatch):
+    private = competitor(session, "Private Co")
+    source = Source(competitor_id=private.id, source_type="pricing", url="https://p.co/pricing")
+    session.add(source)
+    session.flush()
+    session.add(Snapshot(source_id=source.id, content="new page", content_hash="new"))
+    session.add(PricePlanRow(competitor_id=private.id, source_id=source.id, plan="Old", source_hash="old"))
+    session.commit()
+
+    def boom(name, text):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(main, "extract_price_plans", boom)
+    assert client.post(f"/market/competitors/{private.id}/prices").status_code == 502
+    session.expire_all()
+    assert session.execute(select(PricePlanRow.plan)).scalars().all() == ["Old"]
+
+
+def test_price_plans_rls(db_conn, make_user):
+    owner, stranger = make_user(), make_user()
+    company_id, competitor_id, source_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    db_conn.execute("INSERT INTO target_companies (id, name, owner_id) VALUES (%s, 'A', %s)", (company_id, owner))
+    db_conn.execute("INSERT INTO competitors (id, target_company_id, name) VALUES (%s, %s, 'C')", (competitor_id, company_id))
+    db_conn.execute("INSERT INTO sources (id, competitor_id, source_type, url) VALUES (%s, %s, 'pricing', 'u')",
+                    (source_id, competitor_id))
+    db_conn.execute("INSERT INTO price_plans (competitor_id, source_id, plan, source_hash) VALUES (%s, %s, 'Pro', 'h')",
+                    (competitor_id, source_id))
+
+    def count():
+        return db_conn.execute("SELECT count(*) FROM price_plans").fetchone()[0]
+
+    with as_user(db_conn, owner):
+        assert count() == 1
     with as_user(db_conn, stranger):
         assert count() == 0
     with as_user(db_conn, None, role="anon"):

@@ -5,6 +5,9 @@ import { useState } from "react";
 interface DonutChartProps {
   title: string;
   data: { label: string; value: number }[];
+  // Optional drill-down: clicking a slice (or its legend row) reports its label.
+  onSelect?: (label: string) => void;
+  selected?: string | null;
 }
 
 // Same validated categorical order as TrendChart (dataviz skill, references/palette.md) —
@@ -46,11 +49,17 @@ function foldToMax(data: { label: string; value: number }[]): { label: string; v
   return [...kept, { label: "Other", value: otherTotal }];
 }
 
-export function DonutChart({ title, data }: DonutChartProps) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+export function DonutChart({ title, data, onSelect, selected = null }: DonutChartProps) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const setActiveIndex = setHoverIndex;
   const slices = foldToMax(data.filter((d) => d.value > 0));
   const total = slices.reduce((sum, d) => sum + d.value, 0);
   if (total === 0) return null;
+
+  const selectedIndex = slices.findIndex((d) => d.label === selected);
+  const activeIndex = hoverIndex ?? (selectedIndex >= 0 ? selectedIndex : null);
+  // "Other" folds several categories together, so it isn't a single drill-down target.
+  const select = (label: string) => onSelect && label !== "Other" && onSelect(label);
 
   let offset = 0;
   const arcs = slices.map((d, i) => {
@@ -89,7 +98,8 @@ export function DonutChart({ title, data }: DonutChartProps) {
                 opacity={activeIndex === null || activeIndex === i ? 1 : 0.35}
                 onMouseEnter={() => setActiveIndex(i)}
                 onMouseLeave={() => setActiveIndex(null)}
-                style={{ cursor: "default", transition: "stroke-width 120ms ease" }}
+                onClick={() => select(a.label)}
+                style={{ cursor: onSelect ? "pointer" : "default", transition: "stroke-width 120ms ease" }}
               >
                 <title>{`${a.label}: ${a.value} (${Math.round((a.value / total) * 100)}%)`}</title>
               </circle>
@@ -109,12 +119,14 @@ export function DonutChart({ title, data }: DonutChartProps) {
               key={a.label}
               onMouseEnter={() => setActiveIndex(i)}
               onMouseLeave={() => setActiveIndex(null)}
-              className="flex cursor-default items-center gap-1.5 text-xs text-ink-muted dark:text-ink-muted-dark"
+              onClick={() => select(a.label)}
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-muted dark:text-ink-muted-dark"
               style={{ opacity: activeIndex === null || activeIndex === i ? 1 : 0.4 }}
             >
               <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: a.color }} />
               <span className="text-ink dark:text-ink-dark">{a.label}</span>
               <span className="font-mono">{a.value}</span>
+              <span className="font-mono text-ink-muted/70 dark:text-ink-muted-dark/70">({Math.round((a.value / total) * 100)}%)</span>
             </div>
           ))}
         </div>
